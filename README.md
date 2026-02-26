@@ -1,56 +1,25 @@
-Got it 👍
-Below is a **complete, production-grade README** you can directly copy into your repo and give to **GitHub Copilot / Amazon Q / any AI builder**.
+# 🚀 CloudProof — Verified AWS Hands-On Activity Tracker
 
-It includes:
-
-* Full concept
-* Architecture
-* Flow
-* Security model
-* Logic rules
-* Data flow
-* Cron pipeline
-* DB schema
-* API design
-* Edge cases
-* Future scope
-
-Nothing important is missing.
+A platform that tracks and visualizes **real AWS hands-on usage** using CloudTrail audit logs, providing recruiters with a **trusted signal of cloud practice** similar to GitHub's contribution graph.
 
 ---
 
-# 📄 README.md — CloudProof (AWS Verified Activity Tracker)
-
----
-
-# 🚀 Project Name
-
-## **CloudProof — Verified AWS Hands-On Activity Tracker**
-
-A platform that tracks and visualizes **real AWS hands-on usage** using CloudTrail audit logs, providing recruiters with a **trusted signal of cloud practice** similar to GitHub’s contribution graph.
-
----
-
-# 🎯 Problem Statement
+## 🎯 Problem Statement
 
 Recruiters hiring DevOps / Cloud freshers face a major issue:
 
-* Everyone claims “AWS hands-on experience”
+* Everyone claims "AWS hands-on experience"
 * Certificates do not prove practice
 * GitHub does not reflect cloud usage
 * No standard way to verify real AWS activity
 
-This project solves this by providing:
-
-> **Verified, audit-backed visualization of AWS hands-on activity.**
+**Solution:** Verified, audit-backed visualization of AWS hands-on activity.
 
 ---
 
-# 🧠 Core Concept
+## 🧠 Core Concept
 
-CloudTrail logs record all AWS API actions.
-
-This system:
+CloudTrail logs record all AWS API actions. This system:
 
 1. Reads CloudTrail logs securely
 2. Filters meaningful actions
@@ -59,25 +28,7 @@ This system:
 
 ---
 
-# 🔑 Key Principles
-
-### ✔ Measures **practice**, not skill
-
-### ✔ Uses **AWS audit logs**, not self-reported data
-
-### ✔ Requires **one-time user setup**
-
-### ✔ Uses **read-only IAM roles**
-
-### ✔ Never exposes raw logs
-
-### ✔ Shows only aggregated insights
-
----
-
-# 🏗️ System Architecture
-
-## High-Level Flow
+## 🏗️ System Architecture
 
 ```
 User AWS Account
@@ -101,9 +52,9 @@ Frontend Portal (Contribution Graph)
 
 ---
 
-# 🔐 Security Architecture
+## 🔐 Security Architecture
 
-## Access Model
+### Access Model
 
 Uses AWS **Cross-Account IAM Role**:
 
@@ -112,9 +63,7 @@ Uses AWS **Cross-Account IAM Role**:
 * Temporary STS tokens
 * Read-only access
 
----
-
-## Data Privacy Rules
+### Data Privacy Rules
 
 The system NEVER exposes:
 
@@ -132,209 +81,83 @@ Only stores:
 
 ---
 
-# 👤 User Setup (One-Time Only)
+## 🚀 Quick Start with Docker
 
-## Step 1 — Enable CloudTrail
+### Prerequisites
 
-User enables CloudTrail with:
+* Docker Desktop installed and running
+* Git (optional, for cloning)
 
-* Management events: Read + Write
-* All regions
-* Log destination: S3 bucket
+### 1. Start the Application
 
----
+```bash
+# Windows
+start.bat
 
-## Step 2 — Create Private S3 Bucket
-
-Bucket settings:
-
-* Private access only
-* No public ACL
-* No website hosting
-
----
-
-## Step 3 — Create IAM Role
-
-### Permissions:
-
-```
-s3:ListBucket
-s3:GetObject
+# Or manually with Docker Compose
+docker-compose up -d
 ```
 
-Only for CloudTrail bucket.
+This will start:
+* PostgreSQL database (port 5432)
+* Backend API (port 5000)
+* Frontend UI (port 3000)
 
----
+### 2. Configure AWS Credentials
 
-### Trust Policy:
+Edit `backend/.env` with your AWS credentials:
 
-Allows CloudProof AWS account to assume role.
-
----
-
-## Step 4 — Provide Role ARN
-
-User shares only:
-
-```
-IAM Role ARN
+```env
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_REGION=us-east-1
 ```
 
-Setup complete.
+### 3. Create a User
 
----
-
-# 🔄 Backend Log Ingestion Pipeline
-
-## Scheduled Job (Cron / Lambda)
-
-Runs every 30–60 minutes.
-
----
-
-## Processing Flow
-
-1. Assume IAM Role via STS
-2. Obtain temporary credentials
-3. List new CloudTrail log files
-4. Download logs
-5. Parse JSON records
-6. Filter meaningful events
-7. Convert to activity scores
-8. Store aggregated data
-9. Exit
-
-Credentials expire automatically.
-
----
-
-# 🧮 Activity Logic (Core Engine)
-
-## What is a “Verified Action”?
-
-A meaningful AWS resource operation that indicates hands-on practice.
-
----
-
-## Ignored Actions
-
-These NEVER count:
-
-* ConsoleLogin
-* Describe*
-* Get*
-* List*
-* Read-only queries
-* Background system events
-
-Reason: Presence ≠ Practice.
-
----
-
-## Counted Actions
-
-### Strong Signals (High Score)
-
-Resource creation:
-
-* RunInstances
-* CreateBucket
-* CreateVpc
-* CreateRole
-* CreateCluster
-
----
-
-### Medium Signals
-
-Configuration changes:
-
-* ModifyInstance
-* PutBucketPolicy
-* AttachRolePolicy
-
----
-
-### Very High Signals
-
-Infrastructure automation:
-
-* CloudFormation CreateStack
-* EKS cluster operations
-
----
-
-# 📊 Scoring Model
-
-Each event has a weight.
-
-Example:
-
-| Action          | Score |
-| --------------- | ----- |
-| EC2 Launch      | 3     |
-| S3 CreateBucket | 2     |
-| IAM CreateRole  | 2     |
-| Stack Deploy    | 5     |
-
----
-
-## Anti-Abuse Rules
-
-* Daily score caps
-* Per-service limits
-* Session grouping
-* No scoring for repetitive spam
-
----
-
-# 🗄️ Database Design
-
-## Table: users
-
-```
-id
-name
-role_arn
-created_at
+```bash
+curl -X POST http://localhost:5000/api/users \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"Your Name\",\"email\":\"your@email.com\",\"role_arn\":\"arn:aws:iam::123456789012:role/CloudProofRole\"}"
 ```
 
----
+### 4. Generate Sample Data (Optional)
 
-## Table: activity_logs
-
-```
-id
-user_id
-date
-service
-action
-score
+```bash
+docker-compose exec backend python generate_sample_data.py
 ```
 
----
+### 5. Access the Application
 
-## Table: daily_scores
-
-```
-user_id
-date
-total_score
-```
+* Frontend: http://localhost:3000
+* Backend API: http://localhost:5000
+* Health Check: http://localhost:5000/api/health
 
 ---
 
-# 🌐 API Design
+## 📋 API Endpoints
 
-## Get User Activity
-
+### Health Check
 ```
-GET /api/users/{id}/activity
+GET /api/health
+```
+
+### Create User
+```
+POST /api/users
+Body: {
+  "name": "John Doe",
+  "email": "john@example.com",
+  "role_arn": "arn:aws:iam::123456789012:role/CloudProofRole"
+}
+```
+
+### Get User Activity
+```
+GET /api/users/{id}/activity?days=365
 ```
 
 Returns:
-
 ```json
 {
   "heatmap": {
@@ -344,35 +167,218 @@ Returns:
   "services": {
     "EC2": 20,
     "S3": 10
-  }
+  },
+  "recent_actions": [...]
 }
+```
+
+### List All Users
+```
+GET /api/users
 ```
 
 ---
 
-# 🎨 Frontend Features
+## 👤 AWS User Setup (One-Time)
 
-## Profile Page
+### Step 1 — Enable CloudTrail
 
-Displays:
+Enable CloudTrail with:
+* Management events: Read + Write
+* All regions
+* Log destination: S3 bucket
 
-* Verified Activity Graph
-* Service-wise breakdown
-* Recent actions summary
+### Step 2 — Create Private S3 Bucket
+
+Bucket settings:
+* Private access only
+* No public ACL
+* No website hosting
+
+### Step 3 — Create IAM Role
+
+**Permissions:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::your-cloudtrail-bucket",
+        "arn:aws:s3:::your-cloudtrail-bucket/*"
+      ]
+    }
+  ]
+}
+```
+
+**Trust Policy:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::CLOUDPROOF_ACCOUNT_ID:root"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+See `infrastructure/` folder for complete templates.
+
+### Step 4 — Provide Role ARN
+
+Share only the IAM Role ARN when creating your user profile.
 
 ---
 
-## Contribution Graph
+## 🧮 Activity Scoring Logic
 
-Similar to GitHub:
+### Ignored Actions
 
-* Darker = more activity
-* Lighter = less activity
-* Empty = no practice
+These NEVER count:
+* ConsoleLogin
+* Describe*
+* Get*
+* List*
+* Read-only queries
+
+### Counted Actions
+
+| Action Type | Score | Examples |
+|------------|-------|----------|
+| Resource Creation | 3-5 | RunInstances, CreateBucket, CreateVpc |
+| Configuration | 2-3 | ModifyInstance, PutBucketPolicy |
+| Infrastructure as Code | 5 | CloudFormation CreateStack |
+
+### Anti-Abuse Rules
+
+* Daily score caps
+* Per-service limits
+* Session grouping
+* No scoring for repetitive spam
 
 ---
 
-# ❌ What the System Does NOT Track
+## 🗄️ Database Schema
+
+### users
+```sql
+id          SERIAL PRIMARY KEY
+name        VARCHAR(255)
+email       VARCHAR(255) UNIQUE
+role_arn    VARCHAR(255)
+created_at  TIMESTAMP
+```
+
+### activity_logs
+```sql
+id          SERIAL PRIMARY KEY
+user_id     INTEGER REFERENCES users(id)
+date        DATE
+service     VARCHAR(50)
+action      VARCHAR(100)
+score       INTEGER
+```
+
+### daily_scores
+```sql
+user_id     INTEGER REFERENCES users(id)
+date        DATE
+total_score INTEGER
+PRIMARY KEY (user_id, date)
+```
+
+---
+
+## 🛠️ Technology Stack
+
+**Backend:**
+* Python 3.11
+* Flask
+* PostgreSQL
+* boto3 (AWS SDK)
+
+**Frontend:**
+* React
+* JavaScript
+
+**Infrastructure:**
+* Docker & Docker Compose
+* AWS CloudTrail
+* AWS IAM
+
+---
+
+## 🔧 Development Commands
+
+### View Logs
+```bash
+docker-compose logs -f
+docker-compose logs -f backend
+docker-compose logs -f frontend
+```
+
+### Restart Services
+```bash
+docker-compose restart
+docker-compose restart backend
+```
+
+### Stop Services
+```bash
+docker-compose down
+```
+
+### Rebuild After Code Changes
+```bash
+docker-compose up -d --build
+```
+
+### Access Database
+```bash
+docker-compose exec postgres psql -U postgres -d cloudproof
+```
+
+---
+
+## 📁 Project Structure
+
+```
+cloudproof/
+├── backend/              # Flask API
+│   ├── app.py           # Main API server
+│   ├── database.py      # Database connection
+│   ├── ingestion.py     # CloudTrail log processor
+│   ├── scoring.py       # Activity scoring engine
+│   ├── scheduler.py     # Cron job scheduler
+│   ├── schema.sql       # Database schema
+│   └── Dockerfile
+├── frontend/            # React UI
+│   ├── src/
+│   │   ├── App.js      # Main component
+│   │   └── index.js
+│   └── Dockerfile
+├── infrastructure/      # AWS IAM templates
+│   ├── iam-policy.json
+│   └── trust-policy.json
+├── docker-compose.yml   # Docker orchestration
+├── start.bat           # Quick start script
+└── README.md           # This file
+```
+
+---
+
+## ❌ What the System Does NOT Track
 
 * SSH commands inside EC2
 * OS-level activity
@@ -383,26 +389,40 @@ Only AWS control-plane actions.
 
 ---
 
-# ⚙️ Cron Script Workflow
+## 🎯 Target Users
 
-1. Assume IAM Role
-2. Export temporary credentials
-3. Sync new CloudTrail logs
-4. Parse and score
-5. Store results
+**Primary:**
+* DevOps freshers
+* Cloud engineering students
+* Bootcamp graduates
 
----
-
-# 📈 Performance Strategy
-
-* Process only new log files
-* Maintain last-processed timestamp
-* Use batch ingestion
-* Avoid real-time streaming
+**Secondary:**
+* Recruiters
+* Training institutes
 
 ---
 
-# 🔮 Future Enhancements
+## ⚠️ Limitations
+
+* Measures activity, not skill
+* Cannot detect SSH-level actions
+* Requires CloudTrail enabled
+
+---
+
+## 📜 Ethical Disclaimer
+
+This system provides:
+
+> A signal of verified cloud activity derived from audit logs.
+
+It does NOT:
+* Assess skill level
+* Guarantee job performance
+
+---
+
+## 🔮 Future Enhancements
 
 * Docker activity tracking
 * Kubernetes audit integration
@@ -412,101 +432,22 @@ Only AWS control-plane actions.
 
 ---
 
-# 🎯 Target Users
+## 📝 License
 
-Primary:
-
-* DevOps freshers
-* Cloud engineering students
-* Bootcamp graduates
-
-Secondary:
-
-* Recruiters
-* Training institutes
+MIT License - See LICENSE file for details
 
 ---
 
-# ⚠️ Limitations
+## 🤝 Contributing
 
-* Measures activity, not skill
-* Cannot detect SSH-level actions
-* Requires CloudTrail enabled
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
-# 📜 Ethical Disclaimer
+## 📧 Support
 
-This system provides:
-
-> A signal of verified cloud activity derived from audit logs.
-
-It does NOT:
-
-* Assess skill level
-* Guarantee job performance
+For issues and questions, please open an issue on GitHub.
 
 ---
 
-# 🧩 Technology Stack (Recommended)
-
-Backend:
-
-* Python / Node.js
-* AWS SDK
-* PostgreSQL
-
-Frontend:
-
-* React
-* D3 / Chart.js
-
-Infrastructure:
-
-* AWS Lambda / EC2
-* Cron scheduler
-
----
-
-# 🧭 Development Roadmap
-
-## Phase 1 — MVP
-
-* AWS CloudTrail ingestion
-* EC2/S3/IAM tracking
-* Contribution graph
-
----
-
-## Phase 2
-
-* Multi-service scoring
-* Recruiter profile views
-
----
-
-## Phase 3
-
-* DevOps tool integrations
-
----
-
-# 🏁 Conclusion
-
-CloudProof provides a **trusted, audit-based signal of AWS hands-on practice**, enabling recruiters to better assess fresher candidates beyond certificates and claims.
-
----
-
-# 📌 End of README
-
----
-
-If you want next, I can generate:
-
-✅ IAM role JSON templates
-✅ Cron script templates
-✅ Backend ingestion code skeleton
-✅ Database migration scripts
-✅ System design interview explanation version
-
-Just tell me 👍
+**CloudProof** — Verify your cloud practice, not just your claims.

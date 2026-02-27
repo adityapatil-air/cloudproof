@@ -1,0 +1,135 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEUSERID",
+        "arn": "arn:aws:iam::123456789012:user/dev-user",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAEXAMPLEACCESSKEY",
+        "userName": "dev-user"
+      },
+      "eventTime": "2025-02-20T10:15:30Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "RunInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.10",
+      "userAgent": "aws-cli/2.12.0 Python/3.11.0 Windows/10 exe/x86_64 prompt/off command/ec2.run-instances",
+      "requestParameters": {
+        "imageId": "ami-0abcdef1234567890",
+        "instanceType": "t3.micro",
+        "minCount": 1,
+        "maxCount": 1
+      },
+      "responseElements": {
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0123456789abcdef0"
+            }
+          ]
+        }
+      },
+      "requestID": "4c6b2c1b-EXAMPLE-4dd1-8d87-ae9b3b5c1234",
+      "eventID": "8f6e4f0b-1c2d-4e5f-9abc-1234567890ab",
+      "eventType": "AwsApiCall",
+      "recipientAccountId": "123456789012",
+      "managementEvent": true,
+      "readOnly": false
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEUSERID",
+        "arn": "arn:aws:iam::123456789012:user/dev-user",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAEXAMPLEACCESSKEY",
+        "userName": "dev-user"
+      },
+      "eventTime": "2025-02-20T10:20:45Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "CreateBucket",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.10",
+      "userAgent": "aws-cli/2.12.0 Python/3.11.0 Windows/10 exe/x86_64 prompt/off command/s3api.create-bucket",
+      "requestParameters": {
+        "bucketName": "example-dev-bucket",
+        "createBucketConfiguration": {
+          "locationConstraint": "us-east-1"
+        }
+      },
+      "responseElements": {
+        "x-amz-id-2": "exampleID2",
+        "x-amz-request-id": "example-request-id"
+      },
+      "requestID": "e9fb9b31-EXAMPLE-4abc-9d6f-0123456789ab",
+      "eventID": "ab12cd34-56ef-78ab-90cd-ef1234567890",
+      "eventType": "AwsApiCall",
+      "recipientAccountId": "123456789012",
+      "managementEvent": true,
+      "readOnly": "false"
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEUSERID",
+        "arn": "arn:aws:iam::123456789012:user/dev-admin",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAEXAMPLEACCESSKEY2",
+        "userName": "dev-admin"
+      },
+      "eventTime": "2025-02-20T10:25:10Z",
+      "eventSource": "iam.amazonaws.com",
+      "eventName": "CreateRole",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.25",
+      "userAgent": "aws-cli/2.12.0 Python/3.11.0 Windows/10 exe/x86_64 prompt/off command/iam.create-role",
+      "requestParameters": {
+        "roleName": "CloudProofDemoRole",
+        "assumeRolePolicyDocument": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Allow\",\n      \"Principal\": {\"Service\": \"ec2.amazonaws.com\"},\n      \"Action\": \"sts:AssumeRole\"\n    }\n  ]\n}"
+      },
+      "responseElements": {
+        "role": {
+          "roleName": "CloudProofDemoRole",
+          "arn": "arn:aws:iam::123456789012:role/CloudProofDemoRole"
+        }
+      },
+      "requestID": "1a2b3c4d-EXAMPLE-4e5f-9012-3456789abcde",
+      "eventID": "7890ab12-cd34-ef56-7890-ab12cd34ef56",
+      "eventType": "AwsApiCall",
+      "recipientAccountId": "123456789012",
+      "managementEvent": true,
+      "readOnly": false
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAEXAMPLEUSERID",
+        "arn": "arn:aws:iam::123456789012:user/dev-user",
+        "accountId": "123456789012",
+        "accessKeyId": "AKIAEXAMPLEACCESSKEY",
+        "userName": "dev-user"
+      },
+      "eventTime": "2025-02-20T10:30:05Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "DescribeInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.10",
+      "userAgent": "aws-cli/2.12.0 Python/3.11.0 Windows/10 exe/x86_64 prompt/off command/ec2.describe-instances",
+      "requestParameters": {
+        "instancesSet": {}
+      },
+      "responseElements": null,
+      "requestID": "abcd1234-EXAMPLE-5678-90ab-cdef12345678",
+      "eventID": "cdef1234-5678-90ab-cdef-1234567890ab",
+      "eventType": "AwsApiCall",
+      "recipientAccountId": "123456789012",
+      "managementEvent": true,
+      "readOnly": true
+    }
+  ]
+}

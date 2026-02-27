@@ -3,6 +3,7 @@ from flask_cors import CORS
 from database import execute_query
 from datetime import datetime, timedelta
 import logging
+from ingestion import process_local_cloudtrail_logs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,9 +46,9 @@ def create_user():
             return jsonify({'error': 'User with this email already exists'}), 409
         
         execute_query(
-            "INSERT INTO users (name, email, role_arn) VALUES (%s, %s, %s)",
-            (data['name'], data['email'], data['role_arn'])
-        )
+    "INSERT INTO users (name, email, role_arn) VALUES (%s, %s, %s)",
+    (data['name'], data['email'], data['role_arn'])
+    )
         
         logger.info(f"User created: {data['email']}")
         return jsonify({'message': 'User created successfully'}), 201
@@ -93,7 +94,7 @@ def get_user_activity(user_id):
             fetch=True
         )
         
-        heatmap = {str(row['date']): int(row['total_score']) for row in daily_scores}
+        heatmap = {row['date'].isoformat(): int(row['total_score']) for row in daily_scores}
         services = {row['service']: int(row['total']) for row in service_breakdown}
         
         return jsonify({
@@ -157,6 +158,41 @@ def list_users():
     except Exception as e:
         logger.error(f"Error listing users: {str(e)}")
         return jsonify({'error': 'Failed to list users'}), 500
+
+
+@app.route('/api/debug/daily-scores', methods=['GET'])
+def debug_daily_scores():
+    try:
+        rows = execute_query(
+            "SELECT user_id, date, total_score FROM daily_scores ORDER BY date DESC, user_id ASC",
+            fetch=True,
+        )
+        return jsonify(rows), 200
+    except Exception as e:
+        logger.error(f"Error fetching daily_scores debug data: {str(e)}")
+        return jsonify({'error': 'Failed to fetch daily scores'}), 500
+
+
+@app.route('/api/process-sample-logs', methods=['POST'])
+def process_sample_logs():
+    """
+    Manually trigger processing of local CloudTrail-style logs
+    from backend/sample_logs using process_local_cloudtrail_logs().
+    """
+    try:
+        processed_count = process_local_cloudtrail_logs()
+        return (
+            jsonify(
+                {
+                    'message': 'Processed local sample CloudTrail logs',
+                    'records_processed': processed_count,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Error processing sample logs: {str(e)}")
+        return jsonify({'error': 'Failed to process sample logs'}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5000)

@@ -108,9 +108,9 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
         if activities:
             store_activities(activities)
             logger.info(f"Stored {len(activities)} activities for user {user_id}")
-        
+
         update_last_processed_timestamp(user_id, datetime.now())
-        
+
         return len(activities)
         
     except Exception as e:
@@ -235,6 +235,155 @@ def process_local_cloudtrail_logs():
         logger.info(
             f"Stored {len(activities)} local activities for user {user_id} "
             f"from sample_logs"
+        )
+
+    return len(activities)
+
+
+def process_s3_cloudtrail_logs(bucket_name):
+    """
+    Process CloudTrail-style JSON or JSON.GZ log files from the given S3
+    bucket and update activity and daily scores.
+    Uses the same scoring and aggregation logic as process_local_cloudtrail_logs().
+    """
+    # Reuse the same user id resolution logic as local ingestion.
+    user_id_value = (
+        os.getenv("LOCAL_CLOUDTRAIL_USER_ID")
+        or os.getenv("LOCAL_INGEST_USER_ID")
+        or "1"
+    )
+
+    try:
+        user_id = int(user_id_value)
+    except ValueError:
+        logger.warning(
+            f"Invalid LOCAL_CLOUDTRAIL_USER_ID/LOCAL_INGEST_USER_ID value "
+            f"'{user_id_value}', defaulting to 1"
+        )
+        user_id = 1
+
+    s3 = boto3.client("s3")
+
+    # Fetch last processed timestamp to avoid reprocessing older objects.
+    last_processed = get_last_processed_timestamp(user_id)
+    if last_processed is not None:
+        # Normalize to naive datetime for safe comparison.
+        last_processed = last_processed.replace(tzinfo=None)
+
+    activities = []
+    daily_service_scores = {}
+    daily_totals = {}
+
+    paginator = s3.get_paginator("list_objects_v2")
+    page_iterator = paginator.paginate(Bucket=bucket_name)
+
+    for page in page_iterator:
+        for obj in page.get("Contents", []):
+            key = obj.get("Key")
+            if not key:
+                continue
+
+            if last_processed is not None:
+                # S3 returns timezone-aware datetimes; strip tzinfo before comparison.
+                if obj["LastModified"].replace(tzinfo=None) <= last_processed:
+                    continue
+
+            if not (key.endswith(".json") or key.endswith(".json.gz")):
+                continue
+
+            try:
+                s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
+
+                if key.endswith(".gz"):
+                    with gzip.GzipFile(
+                        fileobj=BytesIO(s3_obj["Body"].read())
+                    ) as gzipfile:
+                        content = gzipfile.read()
+                        log_data = json.loads(content)
+                else:
+                    body_bytes = s3_obj["Body"].read()
+                    log_data = json.loads(body_bytes.decode("utf-8"))
+            except Exception as e:
+                logger.warning(
+                    f"Error reading S3 log file s3://{bucket_name}/{key}: {str(e)}"
+                )
+                continue
+
+            for record in log_data.get("Records", []):
+                try:
+                    # Skip read-only events (same as local ingestion).
+                    read_only = record.get("readOnly")
+                    if isinstance(read_only, str):
+                        if read_only.lower() == "true":
+                            continue
+                    elif read_only is True:
+                        continue
+
+                    event_time_str = record.get("eventTime")
+                    event_source = record.get("eventSource", "")
+                    event_name = record.get("eventName", "")
+
+                    if not event_time_str or not event_source or not event_name:
+                        continue
+
+                    event_time = datetime.strptime(
+                        event_time_str, "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                    service = event_source.split(".")[0].upper()
+                    action = event_name
+
+                    if not service or not action:
+                        continue
+
+                    score = calculate_score(service, action)
+                    if score <= 0:
+                        continue
+
+                    date_key = event_time.date()
+                    service_key = f"{date_key}_{service}"
+
+                    if date_key not in daily_totals:
+                        daily_totals[date_key] = 0
+                    if service_key not in daily_service_scores:
+                        daily_service_scores[service_key] = 0
+
+                    if daily_totals[date_key] >= DAILY_SCORE_CAP:
+                        continue
+                    if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
+                        continue
+
+                    activities.append(
+                        {
+                            "user_id": user_id,
+                            "date": date_key,
+                            "service": service,
+                            "action": action,
+                            "score": score,
+                        }
+                    )
+
+                    daily_totals[date_key] += score
+                    daily_service_scores[service_key] += score
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing S3 record from {key}: {str(e)}"
+                    )
+                    continue
+
+    if activities:
+        store_activities(activities)
+        logger.info(
+            f"Stored {len(activities)} S3 activities for user {user_id} "
+            f"from bucket {bucket_name}"
+        )
+
+    # Update processing state after successful run to prevent duplicate processing.
+    try:
+        update_last_processed_timestamp(user_id, datetime.now())
+    except Exception as e:
+        logger.error(
+            f"Error updating last processed timestamp after S3 ingestion: {str(e)}"
         )
 
     return len(activities)

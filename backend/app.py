@@ -3,7 +3,7 @@ from flask_cors import CORS
 from database import execute_query
 from datetime import datetime, timedelta
 import logging
-from ingestion import process_local_cloudtrail_logs
+from ingestion import process_local_cloudtrail_logs, process_s3_cloudtrail_logs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -193,6 +193,28 @@ def process_sample_logs():
     except Exception as e:
         logger.error(f"Error processing sample logs: {str(e)}")
         return jsonify({'error': 'Failed to process sample logs'}), 500
+
+
+@app.route('/api/process-s3-logs', methods=['POST'])
+def process_s3_logs():
+    """
+    Manually trigger processing of CloudTrail-style logs from the
+    fixed S3 bucket using process_s3_cloudtrail_logs().
+    """
+    try:
+        processed_count = process_s3_cloudtrail_logs("cloudproof-test-logs")
+        return (
+            jsonify(
+                {
+                    "message": "Processed S3 CloudTrail logs",
+                    "records_processed": processed_count,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Error processing S3 logs: {str(e)}")
+        return jsonify({"error": "Failed to process S3 logs"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5000)

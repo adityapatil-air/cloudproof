@@ -1,8 +1,13 @@
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255),
     email VARCHAR(255) UNIQUE NOT NULL,
-    role_arn VARCHAR(512) NOT NULL,
+    password_hash VARCHAR(255),
+    role_arn VARCHAR(512),
+    credential_type VARCHAR(20) CHECK(credential_type IN ('access_key', 'role_arn')),
+    aws_access_key_encrypted TEXT,
+    aws_secret_key_encrypted TEXT,
+    cloudtrail_bucket VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -33,3 +38,10 @@ CREATE TABLE IF NOT EXISTS processing_state (
 
 CREATE INDEX idx_activity_logs_user_date ON activity_logs(user_id, date);
 CREATE INDEX idx_daily_scores_user_date ON daily_scores(user_id, date);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

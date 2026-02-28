@@ -216,3 +216,149 @@ body {
   height: 12px;
   border-radius: 2px;
 }
+
+/* Profile page */
+.profile-page {
+  min-height: 100vh;
+  background: #0d1117;
+  padding: 40px 20px;
+}
+
+.profile-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.profile-username {
+  font-size: 28px;
+  color: #c9d1d9;
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.profile-heatmap-section {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 30px;
+  margin-bottom: 30px;
+}
+
+/* Override react-calendar-heatmap default - empty cells light gray so greens stand out */
+.profile-heatmap-section .react-calendar-heatmap .color-empty {
+  fill: #c3cbd6 !important;
+}
+.profile-heatmap-section .react-calendar-heatmap .color-scale-1 {
+  fill: #238636 !important;
+}
+.profile-heatmap-section .react-calendar-heatmap .color-scale-2 {
+  fill: #2ea043 !important;
+}
+.profile-heatmap-section .react-calendar-heatmap .color-scale-3 {
+  fill: #39d353 !important;
+}
+.profile-heatmap-section .react-calendar-heatmap .color-scale-4 {
+  fill: #56d364 !important;
+}
+
+/* Legend boxes (divs need background, not fill) */
+.profile-heatmap-section .legend .legend-box.color-empty { background-color: #c3cbd6; }
+.profile-heatmap-section .legend .legend-box.color-scale-1 { background-color: #238636; }
+.profile-heatmap-section .legend .legend-box.color-scale-2 { background-color: #2ea043; }
+.profile-heatmap-section .legend .legend-box.color-scale-3 { background-color: #39d353; }
+.profile-heatmap-section .legend .legend-box.color-scale-4 { background-color: #56d364; }
+
+.profile-heatmap-section .legend {
+  margin-top: 20px;
+}
+
+.profile-services {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  padding: 30px;
+  margin-bottom: 20px;
+}
+
+.profile-services-title {
+  font-size: 18px;
+  color: #c9d1d9;
+  margin-bottom: 16px;
+}
+
+.profile-services-list {
+  list-style: none;
+}
+
+.profile-service-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #30363d;
+}
+
+.profile-service-item:last-child {
+  border-bottom: none;
+}
+
+.profile-service-name {
+  color: #8b949e;
+}
+
+.profile-service-score {
+  color: #58a6ff;
+  font-weight: bold;
+}
+
+.profile-total {
+  text-align: center;
+  color: #8b949e;
+  font-size: 14px;
+}
+
+.profile-loading,
+.profile-error {
+  text-align: center;
+  color: #8b949e;
+  padding: 40px;
+}
+
+.profile-error {
+  color: #f85149;
+}
+
+
+/* GitHub Heatmap Colors */
+
+.color-empty {
+  fill: #c3cbd6;
+}
+
+.color-scale-1 {
+  fill: #0e4429;
+}
+
+.color-scale-2 {
+  fill: #006d32;
+}
+
+.color-scale-3 {
+  fill: #26a641;
+}
+
+.color-scale-4 {
+  fill: #39d353;
+}
+
+/* Legend styling */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.legend-box {
+  width: 14px;
+  height: 14px;
+}

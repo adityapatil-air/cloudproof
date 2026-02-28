@@ -18,11 +18,18 @@ SQLITE_INITIALIZED = False
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
+    name TEXT,
     email TEXT UNIQUE NOT NULL,
-    role_arn TEXT NOT NULL,
+    password_hash TEXT,
+    role_arn TEXT,
+    credential_type TEXT CHECK(credential_type IN ('access_key', 'role_arn') OR credential_type IS NULL),
+    aws_access_key_encrypted TEXT,
+    aws_secret_key_encrypted TEXT,
+    cloudtrail_bucket TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Migrations: add new columns if they don't exist (for existing DBs)
 
 CREATE TABLE IF NOT EXISTS activity_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +64,13 @@ CREATE INDEX IF NOT EXISTS idx_activity_logs_user_date
 
 CREATE INDEX IF NOT EXISTS idx_daily_scores_user_date
     ON daily_scores(user_id, date);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -116,9 +130,32 @@ def _get_sqlite_connection():
 
 
 def _init_sqlite_schema(conn: sqlite3.Connection):
-    """Create all required tables if they do not already exist."""
+    """Create all required tables if they do not already exist. Run migrations for existing DBs."""
     conn.executescript(SQLITE_SCHEMA)
+    # Migrations: add new auth/credentials columns to existing users table
+    _run_sqlite_migrations(conn)
     conn.commit()
+
+
+def _run_sqlite_migrations(conn: sqlite3.Connection):
+    """Add new columns to users table if they don't exist (for existing installations)."""
+    migrations = [
+        ("password_hash", "ALTER TABLE users ADD COLUMN password_hash TEXT"),
+        ("credential_type", "ALTER TABLE users ADD COLUMN credential_type TEXT"),
+        ("aws_access_key_encrypted", "ALTER TABLE users ADD COLUMN aws_access_key_encrypted TEXT"),
+        ("aws_secret_key_encrypted", "ALTER TABLE users ADD COLUMN aws_secret_key_encrypted TEXT"),
+        ("cloudtrail_bucket", "ALTER TABLE users ADD COLUMN cloudtrail_bucket TEXT"),
+    ]
+    cursor = conn.cursor()
+    for col_name, stmt in migrations:
+        try:
+            cursor.execute("SELECT 1 FROM pragma_table_info('users') WHERE name=?", (col_name,))
+            if cursor.fetchone():
+                continue
+            cursor.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # Column may already exist
+    cursor.close()
 
 
 def _convert_sqlite_placeholders(query, params):

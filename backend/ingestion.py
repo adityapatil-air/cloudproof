@@ -3,7 +3,7 @@ import json
 import gzip
 from datetime import datetime, timedelta
 from io import BytesIO
-from scoring import calculate_score, DAILY_SCORE_CAP, SERVICE_DAILY_CAP
+from scoring import calculate_score, DAILY_SCORE_CAP, SERVICE_DAILY_CAP, ACTION_DAILY_CAP
 from database import execute_query
 import logging
 import os
@@ -44,6 +44,7 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
         activities = []
         daily_service_scores = {}
         daily_totals = {}
+        daily_action_scores = {}
         
         for page in page_iterator:
             for obj in page.get('Contents', []):
@@ -74,16 +75,21 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
                                 if score > 0:
                                     date_key = event_time.date()
                                     service_key = f"{date_key}_{service}"
+                                    action_key = f"{date_key}_{service}_{action}"
                                     
                                     # Apply daily caps
                                     if date_key not in daily_totals:
                                         daily_totals[date_key] = 0
                                     if service_key not in daily_service_scores:
                                         daily_service_scores[service_key] = 0
+                                    if action_key not in daily_action_scores:
+                                        daily_action_scores[action_key] = 0
                                     
                                     if daily_totals[date_key] >= DAILY_SCORE_CAP:
                                         continue
                                     if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
+                                        continue
+                                    if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
                                         continue
                                     
                                     activities.append({
@@ -96,6 +102,7 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
                                     
                                     daily_totals[date_key] += score
                                     daily_service_scores[service_key] += score
+                                    daily_action_scores[action_key] += score
                                     
                             except Exception as e:
                                 logger.warning(f"Error processing record: {str(e)}")
@@ -147,6 +154,7 @@ def process_local_cloudtrail_logs():
     activities = []
     daily_service_scores = {}
     daily_totals = {}
+    daily_action_scores = {}
 
     for entry in os.listdir(sample_logs_dir):
         file_path = os.path.join(sample_logs_dir, entry)
@@ -200,15 +208,20 @@ def process_local_cloudtrail_logs():
 
                 date_key = event_time.date()
                 service_key = f"{date_key}_{service}"
+                action_key = f"{date_key}_{service}_{action}"
 
                 if date_key not in daily_totals:
                     daily_totals[date_key] = 0
                 if service_key not in daily_service_scores:
                     daily_service_scores[service_key] = 0
+                if action_key not in daily_action_scores:
+                    daily_action_scores[action_key] = 0
 
                 if daily_totals[date_key] >= DAILY_SCORE_CAP:
                     continue
                 if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
+                    continue
+                if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
                     continue
 
                 activities.append(
@@ -223,6 +236,7 @@ def process_local_cloudtrail_logs():
 
                 daily_totals[date_key] += score
                 daily_service_scores[service_key] += score
+                daily_action_scores[action_key] += score
 
             except Exception as e:
                 logger.warning(
@@ -273,6 +287,7 @@ def process_s3_cloudtrail_logs(bucket_name):
     activities = []
     daily_service_scores = {}
     daily_totals = {}
+    daily_action_scores = {}
 
     paginator = s3.get_paginator("list_objects_v2")
     page_iterator = paginator.paginate(Bucket=bucket_name)
@@ -341,15 +356,20 @@ def process_s3_cloudtrail_logs(bucket_name):
 
                     date_key = event_time.date()
                     service_key = f"{date_key}_{service}"
+                    action_key = f"{date_key}_{service}_{action}"
 
                     if date_key not in daily_totals:
                         daily_totals[date_key] = 0
                     if service_key not in daily_service_scores:
                         daily_service_scores[service_key] = 0
+                    if action_key not in daily_action_scores:
+                        daily_action_scores[action_key] = 0
 
                     if daily_totals[date_key] >= DAILY_SCORE_CAP:
                         continue
                     if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
+                        continue
+                    if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
                         continue
 
                     activities.append(
@@ -364,6 +384,7 @@ def process_s3_cloudtrail_logs(bucket_name):
 
                     daily_totals[date_key] += score
                     daily_service_scores[service_key] += score
+                    daily_action_scores[action_key] += score
 
                 except Exception as e:
                     logger.warning(

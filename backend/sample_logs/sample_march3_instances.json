@@ -1,0 +1,137 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXS4EXAMPLE",
+        "arn": "arn:aws:iam::123456789012:user/devops-user",
+        "accountId": "123456789012",
+        "userName": "devops-user"
+      },
+      "eventTime": "2026-03-03T09:15:23Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "RunInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.12",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "instanceType": "t2.micro",
+        "minCount": 1,
+        "maxCount": 1
+      },
+      "responseElements": {
+        "requestId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0abc123def456789a",
+              "instanceType": "t2.micro",
+              "instanceState": {
+                "code": 0,
+                "name": "pending"
+              }
+            }
+          ]
+        }
+      },
+      "requestID": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "eventID": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123456789012"
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXS4EXAMPLE",
+        "arn": "arn:aws:iam::123456789012:user/devops-user",
+        "accountId": "123456789012",
+        "userName": "devops-user"
+      },
+      "eventTime": "2026-03-03T14:30:45Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "RunInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.12",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "instanceType": "t3.small",
+        "minCount": 1,
+        "maxCount": 1
+      },
+      "responseElements": {
+        "requestId": "c3d4e5f6-a7b8-9012-cdef-123456789abc",
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0xyz987fed654321b",
+              "instanceType": "t3.small",
+              "instanceState": {
+                "code": 0,
+                "name": "pending"
+              }
+            }
+          ]
+        }
+      },
+      "requestID": "c3d4e5f6-a7b8-9012-cdef-123456789abc",
+      "eventID": "d4e5f6a7-b8c9-0123-def1-23456789abcd",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123456789012"
+    },
+    {
+      "eventVersion": "1.08",
+      "userIdentity": {
+        "type": "IAMUser",
+        "principalId": "AIDAI23HXS4EXAMPLE",
+        "arn": "arn:aws:iam::123456789012:user/devops-user",
+        "accountId": "123456789012",
+        "userName": "devops-user"
+      },
+      "eventTime": "2026-03-03T18:45:12Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "TerminateInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.12",
+      "userAgent": "aws-cli/2.13.0",
+      "requestParameters": {
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0abc123def456789a"
+            }
+          ]
+        }
+      },
+      "responseElements": {
+        "requestId": "e5f6a7b8-c9d0-1234-ef12-3456789abcde",
+        "instancesSet": {
+          "items": [
+            {
+              "instanceId": "i-0abc123def456789a",
+              "currentState": {
+                "code": 32,
+                "name": "shutting-down"
+              },
+              "previousState": {
+                "code": 16,
+                "name": "running"
+              }
+            }
+          ]
+        }
+      },
+      "requestID": "e5f6a7b8-c9d0-1234-ef12-3456789abcde",
+      "eventID": "f6a7b8c9-d0e1-2345-f123-456789abcdef",
+      "readOnly": false,
+      "eventType": "AwsApiCall",
+      "managementEvent": true,
+      "recipientAccountId": "123456789012"
+    }
+  ]
+}

@@ -117,6 +117,89 @@ def get_user_activity(user_id):
         logger.error(f"Error fetching user activity: {str(e)}")
         return jsonify({'error': 'Failed to fetch user activity'}), 500
 
+
+@app.route('/api/users/<int:user_id>/dashboard', methods=['GET'])
+def get_user_dashboard(user_id):
+    try:
+        user = execute_query(
+            "SELECT id, name, email FROM users WHERE id = %s",
+            (user_id,),
+            fetch=True
+        )
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        days = int(request.args.get('days', 30))
+        start_date = datetime.now().date() - timedelta(days=days)
+        
+        daily_usage = execute_query(
+            """
+            SELECT 
+                date,
+                service,
+                action,
+                score,
+                COALESCE(timestamp, created_at) as timestamp
+            FROM activity_logs 
+            WHERE user_id = %s AND date >= %s 
+            ORDER BY date DESC, COALESCE(timestamp, created_at) DESC
+            """,
+            (user_id, start_date),
+            fetch=True
+        )
+        
+        dashboard_data = {}
+        for row in daily_usage:
+            date_str = row['date'].isoformat()
+            if date_str not in dashboard_data:
+                dashboard_data[date_str] = {
+                    'date': date_str,
+                    'services': {},
+                    'total_actions': 0,
+                    'total_score': 0
+                }
+            
+            service = row['service']
+            if service not in dashboard_data[date_str]['services']:
+                dashboard_data[date_str]['services'][service] = {
+                    'count': 0,
+                    'actions': [],
+                    'total_score': 0
+                }
+            
+            dashboard_data[date_str]['services'][service]['count'] += 1
+            dashboard_data[date_str]['services'][service]['total_score'] += row['score']
+            timestamp_val = row['timestamp']
+            if isinstance(timestamp_val, str):
+                timestamp_str = timestamp_val
+            elif timestamp_val:
+                timestamp_str = timestamp_val.isoformat()
+            else:
+                timestamp_str = None
+            dashboard_data[date_str]['services'][service]['actions'].append({
+                'action': row['action'],
+                'score': row['score'],
+                'timestamp': timestamp_str
+            })
+            dashboard_data[date_str]['total_actions'] += 1
+            dashboard_data[date_str]['total_score'] += row['score']
+        
+        result = sorted(dashboard_data.values(), key=lambda x: x['date'], reverse=True)
+        
+        return jsonify({
+            'user': {
+                'id': user[0]['id'],
+                'name': user[0]['name'],
+                'email': user[0]['email']
+            },
+            'dashboard': result
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching dashboard: {str(e)}")
+        return jsonify({'error': 'Failed to fetch dashboard'}), 500
+
 @app.route('/api/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
     try:
@@ -215,6 +298,62 @@ def process_s3_logs():
     except Exception as e:
         logger.error(f"Error processing S3 logs: {str(e)}")
         return jsonify({"error": "Failed to process S3 logs"}), 500
+
+@app.route('/api/users/<int:user_id>/resources', methods=['GET'])
+def get_user_resources(user_id):
+    try:
+        user = execute_query(
+            "SELECT id FROM users WHERE id = %s",
+            (user_id,),
+            fetch=True
+        )
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        resources = execute_query(
+            """
+            SELECT 
+                resource_type,
+                resource_id,
+                parent_resource_id,
+                state,
+                metadata,
+                last_updated
+            FROM resource_state 
+            WHERE user_id = %s 
+            ORDER BY last_updated DESC
+            """,
+            (user_id,),
+            fetch=True
+        )
+        
+        result = []
+        for row in resources:
+            timestamp_val = row['last_updated']
+            if isinstance(timestamp_val, str):
+                timestamp_str = timestamp_val
+            elif timestamp_val:
+                timestamp_str = timestamp_val.isoformat()
+            else:
+                timestamp_str = None
+                
+            result.append({
+                'resource_type': row['resource_type'],
+                'resource_id': row['resource_id'],
+                'parent_resource_id': row['parent_resource_id'],
+                'state': row['state'],
+                'metadata': row['metadata'],
+                'last_updated': timestamp_str
+            })
+        
+        return jsonify({
+            'resources': result
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching resources: {str(e)}")
+        return jsonify({'error': 'Failed to fetch resources'}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5000)

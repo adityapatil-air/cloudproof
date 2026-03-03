@@ -5,36 +5,21 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from database import execute_query
 from datetime import datetime, timedelta
 import random
+from scoring import SCORING_RULES
 
 def generate_sample_data(user_id=1, days=90):
     """Generate sample activity data for testing the heatmap"""
     
-    services = ['EC2', 'S3', 'IAM', 'VPC', 'Lambda', 'RDS', 'CloudFormation']
-    actions = {
-        'EC2': ['RunInstances', 'TerminateInstances', 'StopInstances'],
-        'S3': ['CreateBucket', 'PutBucketPolicy'],
-        'IAM': ['CreateRole', 'AttachRolePolicy'],
-        'VPC': ['CreateVpc', 'CreateSubnet'],
-        'Lambda': ['CreateFunction', 'UpdateFunctionCode'],
-        'RDS': ['CreateDBInstance'],
-        'CloudFormation': ['CreateStack', 'UpdateStack']
-    }
-    
-    scores = {
-        'RunInstances': 3,
-        'TerminateInstances': 2,
-        'StopInstances': 1,
-        'CreateBucket': 2,
-        'PutBucketPolicy': 2,
-        'CreateRole': 2,
-        'AttachRolePolicy': 2,
-        'CreateVpc': 3,
-        'CreateSubnet': 2,
-        'CreateFunction': 3,
-        'UpdateFunctionCode': 2,
-        'CreateDBInstance': 4,
-        'CreateStack': 5,
-        'UpdateStack': 4
+    # Use actual services and actions from scoring system
+    services_actions = {
+        'EC2': list(SCORING_RULES['EC2'].keys()),
+        'S3': list(SCORING_RULES['S3'].keys()),
+        'IAM': list(SCORING_RULES['IAM'].keys()),
+        'VPC': list(SCORING_RULES['VPC'].keys()),
+        'LAMBDA': list(SCORING_RULES['LAMBDA'].keys()),
+        'RDS': list(SCORING_RULES['RDS'].keys()),
+        'CLOUDFORMATION': list(SCORING_RULES['CLOUDFORMATION'].keys()),
+        'EKS': list(SCORING_RULES['EKS'].keys()),
     }
     
     print(f"Generating {days} days of sample data for user {user_id}...")
@@ -51,9 +36,9 @@ def generate_sample_data(user_id=1, days=90):
             num_activities = random.randint(1, 5)
             
             for _ in range(num_activities):
-                service = random.choice(services)
-                action = random.choice(actions[service])
-                score = scores[action]
+                service = random.choice(list(services_actions.keys()))
+                action = random.choice(services_actions[service])
+                score = SCORING_RULES[service][action]
                 
                 try:
                     execute_query(
@@ -78,7 +63,7 @@ def generate_sample_data(user_id=1, days=90):
         
         current_date += timedelta(days=1)
     
-    print(f"✅ Generated {total_activities} sample activities!")
+    print(f"[OK] Generated {total_activities} sample activities!")
     print(f"View at: http://localhost:3000")
 
 if __name__ == '__main__':

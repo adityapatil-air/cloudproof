@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     service TEXT NOT NULL,
     action TEXT NOT NULL,
     score INTEGER NOT NULL,
+    timestamp TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -52,11 +53,27 @@ CREATE TABLE IF NOT EXISTS processing_state (
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS resource_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    parent_resource_id TEXT,
+    state TEXT NOT NULL,
+    metadata TEXT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, resource_type, resource_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_activity_logs_user_date
     ON activity_logs(user_id, date);
 
 CREATE INDEX IF NOT EXISTS idx_daily_scores_user_date
     ON daily_scores(user_id, date);
+
+CREATE INDEX IF NOT EXISTS idx_resource_state_user
+    ON resource_state(user_id, resource_type, state);
 """
 
 

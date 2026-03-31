@@ -3,11 +3,14 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(100) UNIQUE,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),
     role_arn VARCHAR(512),
     s3_bucket VARCHAR(255),
     s3_prefix VARCHAR(512) DEFAULT '',
     aws_region VARCHAR(50) DEFAULT 'us-east-1',
     sync_pin_hash VARCHAR(255),
+    aws_access_key_encrypted TEXT,
+    aws_secret_key_encrypted TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

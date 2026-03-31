@@ -21,11 +21,14 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE,
     name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
     role_arn TEXT,
     s3_bucket TEXT,
     s3_prefix TEXT DEFAULT '',
     aws_region TEXT DEFAULT 'us-east-1',
     sync_pin_hash TEXT,
+    aws_access_key_encrypted TEXT,
+    aws_secret_key_encrypted TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -150,10 +153,13 @@ def _migrate_sqlite(conn: sqlite3.Connection):
     """Add columns introduced in later versions to existing SQLite databases."""
     new_columns = [
         "ALTER TABLE users ADD COLUMN username TEXT",
+        "ALTER TABLE users ADD COLUMN password_hash TEXT",
         "ALTER TABLE users ADD COLUMN s3_bucket TEXT",
         "ALTER TABLE users ADD COLUMN s3_prefix TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN aws_region TEXT DEFAULT 'us-east-1'",
         "ALTER TABLE users ADD COLUMN sync_pin_hash TEXT",
+        "ALTER TABLE users ADD COLUMN aws_access_key_encrypted TEXT",
+        "ALTER TABLE users ADD COLUMN aws_secret_key_encrypted TEXT",
         "ALTER TABLE activity_logs ADD COLUMN event_id TEXT",
     ]
     for sql in new_columns:

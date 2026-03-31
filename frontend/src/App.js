@@ -7,6 +7,16 @@ import Dashboard from './Dashboard';
 import Visual from './Visual';
 import Resources from './Resources';
 
+/** Returns the logged-in user if they own this profile, else null. */
+function getLoggedInOwner(username) {
+  try {
+    const token = localStorage.getItem('cloudproof_token');
+    const user  = JSON.parse(localStorage.getItem('cloudproof_user') || 'null');
+    if (token && user && user.username === username) return user;
+  } catch (_) {}
+  return null;
+}
+
 const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 const IS_DEV = process.env.NODE_ENV === 'development';
 
@@ -49,7 +59,14 @@ export default function App({ username }) {
   // toast
   const [toast, setToast] = useState('');
 
-  const owner = isOwner(username);
+  const owner      = isOwner(username);
+  const loggedInMe = getLoggedInOwner(username); // non-null if this IS the logged-in user
+
+  const handleLogout = () => {
+    localStorage.removeItem('cloudproof_token');
+    localStorage.removeItem('cloudproof_user');
+    navigate('/login');
+  };
 
   // ── fetch profile ──────────────────────────────────────────────────────
   const fetchProfile = useCallback(async () => {
@@ -138,6 +155,16 @@ export default function App({ username }) {
     <div>
       {IS_DEV && <div className="dev-banner">⚠ Development Mode — test features active for profile owners</div>}
 
+      {/* Setup nudge: shown when the logged-in user hasn't connected AWS yet */}
+      {loggedInMe && !loggedInMe.has_bucket && (
+        <div className="setup-banner">
+          <span>☁ Connect your AWS account to start tracking activity.</span>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/setup')}>
+            Complete Setup →
+          </button>
+        </div>
+      )}
+
       {/* ── Navbar ──────────────────────────────────────────────────────── */}
       <nav className="navbar">
         <div className="navbar-inner">
@@ -168,6 +195,11 @@ export default function App({ username }) {
             {owner && (
               <button className="btn btn-primary btn-sm" onClick={openSync} disabled={syncing}>
                 {syncing ? <><span className="spinner" />Syncing…</> : 'Sync from AWS'}
+              </button>
+            )}
+            {loggedInMe && (
+              <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
+                Sign out
               </button>
             )}
           </div>

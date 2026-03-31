@@ -125,13 +125,28 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
         raise
 
 
-def process_user_s3_logs(user_id: int, bucket_name: str, s3_prefix: str = '', aws_region: str = 'us-east-1') -> int:
+def process_user_s3_logs(
+    user_id: int,
+    bucket_name: str,
+    s3_prefix: str = '',
+    aws_region: str = 'us-east-1',
+    aws_access_key: str = None,
+    aws_secret_key: str = None,
+) -> int:
     """
     Process CloudTrail logs for a specific user from their own S3 bucket.
-    All parameters come from the user's stored profile — nothing is hardcoded.
-    Uses ambient AWS credentials from the machine (boto3 credential chain).
+    If aws_access_key/aws_secret_key are provided, uses those credentials.
+    Otherwise falls back to the machine's ambient AWS credential chain.
     """
-    s3 = boto3.client('s3', region_name=aws_region)
+    if aws_access_key and aws_secret_key:
+        s3 = boto3.client(
+            's3',
+            region_name=aws_region,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+        )
+    else:
+        s3 = boto3.client('s3', region_name=aws_region)
 
     last_processed = get_last_processed_timestamp(user_id)
     if last_processed is not None:

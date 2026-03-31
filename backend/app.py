@@ -7,10 +7,13 @@ import os
 import re
 import uuid
 import random
+import boto3
 from werkzeug.security import generate_password_hash, check_password_hash
 from ingestion import process_local_cloudtrail_logs, process_s3_cloudtrail_logs, process_user_s3_logs, store_activities
 from scoring import calculate_score, DAILY_SCORE_CAP, SERVICE_DAILY_CAP, ACTION_DAILY_CAP
 from config import get_credibility, CREDIBILITY_TIERS
+from auth import hash_password, verify_password, generate_token, require_auth
+from credentials import encrypt_credential, decrypt_credential
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -745,6 +748,253 @@ def _generate_test_activities(user_id):
             daily_action_scores[action_key]   += score
 
     return activities
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# JWT AUTH ROUTES  (/api/auth/*)
+# These add proper login/signup on top of the existing sync-pin system.
+# Existing routes (/api/register, /api/profile/*) are NOT changed.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/auth/signup', methods=['POST'])
+def auth_signup():
+    """
+    Create an account with email + password.
+    S3 bucket is NOT required here — users configure it after login via /setup.
+    """
+    try:
+        data = request.json or {}
+        missing = [f for f in ['username', 'name', 'email', 'password'] if not data.get(f)]
+        if missing:
+            return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
+
+        username = data['username'].strip().lower()
+        name     = data['name'].strip()
+        email    = data['email'].strip().lower()
+        password = data['password']
+
+        if not re.match(r'^[a-z0-9_-]{3,30}$', username):
+            return jsonify({'error': 'Username: 3–30 chars, lowercase letters/numbers/hyphens/underscores.'}), 400
+        if len(password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters.'}), 400
+
+        if execute_query("SELECT id FROM users WHERE email = %s",    (email,),    fetch=True):
+            return jsonify({'error': 'Email already registered.'}), 409
+        if execute_query("SELECT id FROM users WHERE username = %s", (username,), fetch=True):
+            return jsonify({'error': 'Username already taken.'}), 409
+
+        pwd_hash = hash_password(password)
+        execute_query(
+            "INSERT INTO users (username, name, email, password_hash) VALUES (%s, %s, %s, %s)",
+            (username, name, email, pwd_hash)
+        )
+        user = execute_query("SELECT id, username, name, email FROM users WHERE email = %s", (email,), fetch=True)
+        u = user[0]
+        token = generate_token(u['id'])
+        logger.info(f"New JWT account: {username} ({email})")
+        return jsonify({
+            'success': True,
+            'message': 'Account created successfully.',
+            'token': token,
+            'user': {'id': u['id'], 'username': u['username'], 'name': u['name'], 'email': u['email']},
+        }), 201
+    except Exception as e:
+        logger.error(f"auth_signup error: {e}")
+        return jsonify({'error': 'Failed to create account.'}), 500
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """JWT login with email + password. Returns signed token."""
+    try:
+        data = request.json or {}
+        email    = (data.get('email')    or '').strip().lower()
+        password =  data.get('password') or ''
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required.'}), 400
+
+        user = execute_query(
+            "SELECT id, username, name, email, password_hash, s3_bucket, aws_region FROM users WHERE email = %s",
+            (email,), fetch=True
+        )
+        if not user or not user[0].get('password_hash'):
+            return jsonify({'error': 'Invalid email or password.'}), 401
+        if not verify_password(user[0]['password_hash'], password):
+            return jsonify({'error': 'Invalid email or password.'}), 401
+
+        u     = user[0]
+        token = generate_token(u['id'])
+        logger.info(f"JWT login: {email}")
+        return jsonify({
+            'success': True,
+            'token': token,
+            'user': {
+                'id':         u['id'],
+                'username':   u.get('username'),
+                'name':       u.get('name'),
+                'email':      u['email'],
+                'has_bucket': bool(u.get('s3_bucket')),
+            },
+        }), 200
+    except Exception as e:
+        logger.error(f"auth_login error: {e}")
+        return jsonify({'error': 'Login failed.'}), 500
+
+
+@app.route('/api/auth/me', methods=['GET'])
+@require_auth
+def auth_me(user_id):
+    """Return current authenticated user's info."""
+    try:
+        user = execute_query(
+            "SELECT id, username, name, email, s3_bucket, aws_region, created_at FROM users WHERE id = %s",
+            (user_id,), fetch=True
+        )
+        if not user:
+            return jsonify({'error': 'User not found.'}), 404
+        u  = user[0]
+        ca = u.get('created_at')
+        return jsonify({
+            'success': True,
+            'user': {
+                'id':         u['id'],
+                'username':   u.get('username'),
+                'name':       u.get('name'),
+                'email':      u['email'],
+                'has_bucket': bool(u.get('s3_bucket')),
+                'aws_region': u.get('aws_region', 'us-east-1'),
+                'created_at': ca.isoformat() if hasattr(ca, 'isoformat') else str(ca),
+            },
+        }), 200
+    except Exception as e:
+        logger.error(f"auth_me error: {e}")
+        return jsonify({'error': 'Failed to fetch user.'}), 500
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """Stateless logout — client discards the token."""
+    return jsonify({'success': True, 'message': 'Logged out.'}), 200
+
+
+# ── AWS Credential & Bucket Setup ─────────────────────────────────────────────
+
+@app.route('/api/credentials', methods=['POST'])
+@require_auth
+def save_credentials(user_id):
+    """
+    Store the user's AWS access key + secret (encrypted).
+    Called from the Setup wizard after login.
+    """
+    try:
+        data = request.json or {}
+        access_key = (data.get('access_key') or '').strip()
+        secret_key = (data.get('secret_key') or '').strip()
+        region     = (data.get('region')     or 'us-east-1').strip()
+
+        if not access_key or not secret_key:
+            return jsonify({'error': 'Both access_key and secret_key are required.'}), 400
+
+        # Quick validation — try listing buckets before saving
+        try:
+            boto3.client(
+                's3',
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name=region,
+            ).list_buckets()
+        except Exception as aws_err:
+            return jsonify({'error': f'AWS credentials are invalid: {aws_err}'}), 400
+
+        execute_query(
+            "UPDATE users SET aws_access_key_encrypted = %s, aws_secret_key_encrypted = %s, aws_region = %s WHERE id = %s",
+            (encrypt_credential(access_key), encrypt_credential(secret_key), region, user_id)
+        )
+        logger.info(f"Credentials saved for user {user_id}")
+        return jsonify({'success': True, 'message': 'AWS credentials saved.'}), 200
+    except Exception as e:
+        logger.error(f"save_credentials error: {e}")
+        return jsonify({'error': 'Failed to save credentials.'}), 500
+
+
+@app.route('/api/buckets', methods=['GET'])
+@require_auth
+def list_buckets(user_id):
+    """List S3 buckets visible to the user's stored AWS credentials."""
+    try:
+        row = execute_query(
+            "SELECT aws_access_key_encrypted, aws_secret_key_encrypted, aws_region FROM users WHERE id = %s",
+            (user_id,), fetch=True
+        )
+        if not row or not row[0].get('aws_access_key_encrypted'):
+            return jsonify({'error': 'No AWS credentials configured. Save credentials first.'}), 400
+
+        r  = row[0]
+        ak = decrypt_credential(r['aws_access_key_encrypted'])
+        sk = decrypt_credential(r['aws_secret_key_encrypted'])
+
+        s3       = boto3.client('s3', aws_access_key_id=ak, aws_secret_access_key=sk, region_name=r.get('aws_region', 'us-east-1'))
+        response = s3.list_buckets()
+        buckets  = [b['Name'] for b in response.get('Buckets', [])]
+        return jsonify({'success': True, 'buckets': buckets}), 200
+    except Exception as e:
+        logger.error(f"list_buckets error: {e}")
+        return jsonify({'error': f'Failed to list buckets: {str(e)}'}), 500
+
+
+@app.route('/api/buckets/select', methods=['POST'])
+@require_auth
+def select_bucket(user_id):
+    """Save the chosen S3 bucket (and optional prefix) to the user's profile."""
+    try:
+        data      = request.json or {}
+        bucket    = (data.get('bucket')    or '').strip()
+        s3_prefix = (data.get('s3_prefix') or '').strip()
+        if not bucket:
+            return jsonify({'error': 'bucket is required.'}), 400
+
+        execute_query(
+            "UPDATE users SET s3_bucket = %s, s3_prefix = %s WHERE id = %s",
+            (bucket, s3_prefix, user_id)
+        )
+        logger.info(f"User {user_id} selected bucket: {bucket}")
+        return jsonify({'success': True, 'message': 'Bucket saved.', 'bucket': bucket}), 200
+    except Exception as e:
+        logger.error(f"select_bucket error: {e}")
+        return jsonify({'error': 'Failed to save bucket.'}), 500
+
+
+@app.route('/api/sync', methods=['POST'])
+@require_auth
+def sync_logs(user_id):
+    """
+    Trigger a log sync for the logged-in user using their stored AWS credentials.
+    Uses the bucket they selected during setup.
+    """
+    try:
+        row = execute_query(
+            "SELECT s3_bucket, s3_prefix, aws_region, aws_access_key_encrypted, aws_secret_key_encrypted FROM users WHERE id = %s",
+            (user_id,), fetch=True
+        )
+        if not row or not row[0].get('s3_bucket'):
+            return jsonify({'error': 'No S3 bucket configured. Complete setup first.'}), 400
+
+        r      = row[0]
+        ak     = decrypt_credential(r.get('aws_access_key_encrypted') or '')
+        sk     = decrypt_credential(r.get('aws_secret_key_encrypted') or '')
+        count  = process_user_s3_logs(
+            user_id=user_id,
+            bucket_name=r['s3_bucket'],
+            s3_prefix=r.get('s3_prefix') or '',
+            aws_region=r.get('aws_region') or 'us-east-1',
+            aws_access_key=ak or None,
+            aws_secret_key=sk or None,
+        )
+        logger.info(f"Sync complete for user {user_id}: {count} records")
+        return jsonify({'success': True, 'message': 'Sync complete.', 'records_processed': count}), 200
+    except Exception as e:
+        logger.error(f"sync_logs error: {e}")
+        return jsonify({'error': f'Sync failed: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

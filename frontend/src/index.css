@@ -919,3 +919,10 @@ input, select, textarea { font-family: inherit; }
 .setup-sync-icon  { font-size:48px; color:var(--green); margin-bottom:8px; }
 .setup-sync-count { font-size:22px; font-weight:700; margin-bottom:4px; }
 .setup-banner { background:linear-gradient(90deg,rgba(31,111,235,.13),rgba(35,134,54,.13)); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:center; gap:16px; padding:10px 20px; font-size:13px; }
+
+/* ── Sync progress bar ─────────────────────────────────────────────────────── */
+.sync-progress-wrap { margin-top:24px; text-align:left; }
+.sync-progress-label { font-size:13px; color:var(--text-2); margin-bottom:8px; }
+.sync-progress-track { width:100%; height:8px; background:var(--surface2); border-radius:99px; overflow:hidden; }
+.sync-progress-bar   { height:100%; background:linear-gradient(90deg,var(--blue),#58a6ff); border-radius:99px; transition:width .4s ease; min-width:4px; }
+.sync-progress-pct   { font-size:12px; color:var(--text-2); margin-top:6px; text-align:right; }

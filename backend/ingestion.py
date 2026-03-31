@@ -132,11 +132,16 @@ def process_user_s3_logs(
     aws_region: str = 'us-east-1',
     aws_access_key: str = None,
     aws_secret_key: str = None,
+    progress_callback=None,
 ) -> int:
     """
     Process CloudTrail logs for a specific user from their own S3 bucket.
     If aws_access_key/aws_secret_key are provided, uses those credentials.
     Otherwise falls back to the machine's ambient AWS credential chain.
+
+    progress_callback(event, value) is called with:
+      ('total', n)       — total number of files to process
+      ('batch_done', n)  — n records processed in the latest batch
     """
     if aws_access_key and aws_secret_key:
         s3 = boto3.client(
@@ -152,31 +157,41 @@ def process_user_s3_logs(
     if last_processed is not None:
         last_processed = last_processed.replace(tzinfo=None)
 
-    activities = []
-    daily_service_scores = {}
-    daily_totals = {}
-    daily_action_scores = {}
-
+    # ── Collect all eligible file keys first so we can report a total ─────────
+    file_keys = []
     paginator = s3.get_paginator('list_objects_v2')
     paginate_kwargs = {'Bucket': bucket_name}
     if s3_prefix:
         paginate_kwargs['Prefix'] = s3_prefix
 
-    page_iterator = paginator.paginate(**paginate_kwargs)
-
-    for page in page_iterator:
+    for page in paginator.paginate(**paginate_kwargs):
         for obj in page.get('Contents', []):
             key = obj.get('Key')
             if not key:
                 continue
-
             if last_processed is not None:
                 if obj['LastModified'].replace(tzinfo=None) <= last_processed:
                     continue
-
             if not (key.endswith('.json') or key.endswith('.json.gz')):
                 continue
+            file_keys.append(key)
 
+    if progress_callback:
+        progress_callback('total', len(file_keys))
+
+    # ── Daily cap accumulators (persist across batches) ───────────────────────
+    daily_service_scores = {}
+    daily_totals = {}
+    daily_action_scores = {}
+    total_records = 0
+    BATCH_SIZE = 50
+
+    # ── Process files in batches of BATCH_SIZE ────────────────────────────────
+    for batch_start in range(0, len(file_keys), BATCH_SIZE):
+        batch_keys = file_keys[batch_start:batch_start + BATCH_SIZE]
+        batch_activities = []
+
+        for key in batch_keys:
             try:
                 s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
                 if key.endswith('.gz'):
@@ -227,11 +242,9 @@ def process_user_s3_logs(
                     if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
                         continue
 
-                    # eventID is CloudTrail's unique identifier per event.
-                    # Storing it lets store_activities skip exact duplicates on re-sync.
                     event_id = record.get('eventID')
 
-                    activities.append({
+                    batch_activities.append({
                         'user_id': user_id,
                         'date': date_key,
                         'service': service,
@@ -248,16 +261,23 @@ def process_user_s3_logs(
                     logger.warning(f"Error processing record from {key}: {str(e)}")
                     continue
 
-    if activities:
-        store_activities(activities)
-        logger.info(f"Stored {len(activities)} activities for user {user_id} from s3://{bucket_name}")
+        if batch_activities:
+            store_activities(batch_activities)
+            total_records += len(batch_activities)
+            logger.info(f"Batch stored {len(batch_activities)} activities for user {user_id}")
+
+        if progress_callback:
+            progress_callback('batch_done', len(batch_keys))
+
+    if total_records:
+        logger.info(f"Total: stored {total_records} activities for user {user_id} from s3://{bucket_name}")
 
     try:
         update_last_processed_timestamp(user_id, datetime.now())
     except Exception as e:
         logger.error(f"Error updating last processed timestamp: {str(e)}")
 
-    return len(activities)
+    return total_records
 
 
 def process_local_cloudtrail_logs():

@@ -31,9 +31,11 @@ export default function Setup() {
   const [s3Prefix,   setS3Prefix]   = useState('');
 
   // Step 3 — Processing
-  const [syncing,    setSyncing]    = useState(false);
-  const [syncDone,   setSyncDone]   = useState(false);
-  const [syncCount,  setSyncCount]  = useState(0);
+  const [syncing,      setSyncing]      = useState(false);
+  const [syncDone,     setSyncDone]     = useState(false);
+  const [syncCount,    setSyncCount]    = useState(0);
+  const [syncProgress, setSyncProgress] = useState(0);   // files done
+  const [syncTotal,    setSyncTotal]    = useState(0);   // files total
 
   // ── Step 1: validate & save credentials ──────────────────────────────────
   const saveCredentials = async (e) => {
@@ -78,17 +80,44 @@ export default function Setup() {
     }
   };
 
-  // ── Step 3: trigger log sync ──────────────────────────────────────────────
+  // ── Step 3: trigger log sync (async + polling) ───────────────────────────
   const runSync = async () => {
-    setError(''); setSyncing(true);
+    setError(''); setSyncing(true); setSyncProgress(0); setSyncTotal(0);
     try {
-      const { data } = await axios.post(`${API}/api/sync`, {}, { headers: authHeader() });
-      setSyncCount(data.records_processed || 0);
-      setSyncDone(true);
+      // Start async job
+      const { data: startData } = await axios.post(`${API}/api/sync`, {}, { headers: authHeader() });
+      const jobId = startData.job_id;
+
+      // Poll every 2 seconds
+      const poll = setInterval(async () => {
+        try {
+          const { data: status } = await axios.get(
+            `${API}/api/sync/status/${jobId}`,
+            { headers: authHeader() }
+          );
+          setSyncProgress(status.files_done || 0);
+          setSyncTotal(status.files_total || 0);
+
+          if (status.status === 'done') {
+            clearInterval(poll);
+            setSyncCount(status.records || 0);
+            setSyncing(false);
+            setSyncDone(true);
+          } else if (status.status === 'error') {
+            clearInterval(poll);
+            setError(status.error || 'Sync failed. You can retry from your profile.');
+            setSyncing(false);
+            setSyncDone(true);
+          }
+        } catch {
+          clearInterval(poll);
+          setError('Lost connection to server during sync.');
+          setSyncing(false);
+          setSyncDone(true);
+        }
+      }, 2000);
     } catch (err) {
-      setError(err.response?.data?.error || 'Sync failed. You can retry from your profile.');
-      setSyncDone(true); // still let them proceed
-    } finally {
+      setError(err.response?.data?.error || 'Failed to start sync.');
       setSyncing(false);
     }
   };
@@ -249,25 +278,46 @@ export default function Setup() {
             {!syncDone ? (
               <>
                 <div className="setup-card-desc">
-                  CloudProof will now read your CloudTrail logs from S3, score your activity,
-                  and build your heatmap. This may take a few seconds.
+                  CloudProof will read your CloudTrail logs from S3, score your activity,
+                  and build your heatmap. Large buckets are processed in batches.
                 </div>
-                <button
-                  className="btn btn-primary btn-lg"
-                  style={{ marginTop: 24, width: '100%' }}
-                  onClick={runSync}
-                  disabled={syncing}
-                >
-                  {syncing
-                    ? <><span className="spinner" />Processing logs…</>
-                    : '▶ Start Sync'}
-                </button>
-                <p style={{ marginTop: 12, color: 'var(--text-2)', fontSize: 13 }}>
-                  You can also skip this and sync later from your profile.
-                </p>
-                <button className="btn btn-ghost" style={{ marginTop: 4 }} onClick={goToProfile}>
-                  Skip → Go to profile
-                </button>
+
+                {syncing ? (
+                  <div className="sync-progress-wrap">
+                    <div className="sync-progress-label">
+                      {syncTotal > 0
+                        ? `Processing file ${syncProgress} of ${syncTotal}…`
+                        : 'Counting log files…'}
+                    </div>
+                    <div className="sync-progress-track">
+                      <div
+                        className="sync-progress-bar"
+                        style={{ width: syncTotal > 0 ? `${Math.round((syncProgress / syncTotal) * 100)}%` : '0%' }}
+                      />
+                    </div>
+                    {syncTotal > 0 && (
+                      <div className="sync-progress-pct">
+                        {Math.round((syncProgress / syncTotal) * 100)}%
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      className="btn btn-primary btn-lg"
+                      style={{ marginTop: 24, width: '100%' }}
+                      onClick={runSync}
+                    >
+                      ▶ Start Sync
+                    </button>
+                    <p style={{ marginTop: 12, color: 'var(--text-2)', fontSize: 13 }}>
+                      You can also skip this and sync later from your profile.
+                    </p>
+                    <button className="btn btn-ghost" style={{ marginTop: 4 }} onClick={goToProfile}>
+                      Skip → Go to profile
+                    </button>
+                  </>
+                )}
               </>
             ) : (
               <>

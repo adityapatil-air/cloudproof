@@ -7,6 +7,8 @@ import os
 import re
 import uuid
 import random
+import secrets
+import threading
 import boto3
 from werkzeug.security import generate_password_hash, check_password_hash
 from ingestion import process_local_cloudtrail_logs, process_s3_cloudtrail_logs, process_user_s3_logs, store_activities
@@ -22,6 +24,9 @@ from oauth import generate_state, verify_state, github_auth_url, github_get_user
 from emailer import send_verification_email, send_reset_email
 
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+
+# In-memory store for async sync jobs: job_id → state dict
+sync_jobs = {}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -983,13 +988,35 @@ def select_bucket(user_id):
         return jsonify({'error': 'Failed to save bucket.'}), 500
 
 
+def _run_sync(job_id, user_id, bucket_name, s3_prefix, aws_region, ak, sk):
+    """Background worker: process S3 logs and update sync_jobs[job_id]."""
+    def on_progress(event, value):
+        if event == 'total':
+            sync_jobs[job_id]['files_total'] = value
+        elif event == 'batch_done':
+            sync_jobs[job_id]['files_done'] = sync_jobs[job_id].get('files_done', 0) + value
+
+    try:
+        count = process_user_s3_logs(
+            user_id=user_id,
+            bucket_name=bucket_name,
+            s3_prefix=s3_prefix,
+            aws_region=aws_region,
+            aws_access_key=ak or None,
+            aws_secret_key=sk or None,
+            progress_callback=on_progress,
+        )
+        sync_jobs[job_id].update({'status': 'done', 'records': count, 'finished_at': datetime.now()})
+        logger.info(f"Sync complete for user {user_id}: {count} records")
+    except Exception as e:
+        logger.error(f"Sync error for user {user_id}: {e}")
+        sync_jobs[job_id].update({'status': 'error', 'error': str(e), 'finished_at': datetime.now()})
+
+
 @app.route('/api/sync', methods=['POST'])
 @require_auth
 def sync_logs(user_id):
-    """
-    Trigger a log sync for the logged-in user using their stored AWS credentials.
-    Uses the bucket they selected during setup.
-    """
+    """Start an async log sync. Returns job_id immediately; poll /api/sync/status/<job_id>."""
     try:
         row = execute_query(
             "SELECT s3_bucket, s3_prefix, aws_region, aws_access_key_encrypted, aws_secret_key_encrypted FROM users WHERE id = %s",
@@ -998,22 +1025,53 @@ def sync_logs(user_id):
         if not row or not row[0].get('s3_bucket'):
             return jsonify({'error': 'No S3 bucket configured. Complete setup first.'}), 400
 
-        r      = row[0]
-        ak     = decrypt_credential(r.get('aws_access_key_encrypted') or '')
-        sk     = decrypt_credential(r.get('aws_secret_key_encrypted') or '')
-        count  = process_user_s3_logs(
-            user_id=user_id,
-            bucket_name=r['s3_bucket'],
-            s3_prefix=r.get('s3_prefix') or '',
-            aws_region=r.get('aws_region') or 'us-east-1',
-            aws_access_key=ak or None,
-            aws_secret_key=sk or None,
+        r  = row[0]
+        ak = decrypt_credential(r.get('aws_access_key_encrypted') or '')
+        sk = decrypt_credential(r.get('aws_secret_key_encrypted') or '')
+
+        # Purge stale completed jobs older than 5 minutes
+        cutoff = datetime.now() - timedelta(minutes=5)
+        stale = [jid for jid, j in sync_jobs.items() if j.get('finished_at') and j['finished_at'] < cutoff]
+        for jid in stale:
+            sync_jobs.pop(jid, None)
+
+        job_id = secrets.token_hex(8)
+        sync_jobs[job_id] = {
+            'status': 'running',
+            'files_done': 0,
+            'files_total': 0,
+            'records': 0,
+            'error': None,
+            'finished_at': None,
+        }
+
+        t = threading.Thread(
+            target=_run_sync,
+            args=(job_id, user_id, r['s3_bucket'], r.get('s3_prefix') or '',
+                  r.get('aws_region') or 'us-east-1', ak, sk),
+            daemon=True,
         )
-        logger.info(f"Sync complete for user {user_id}: {count} records")
-        return jsonify({'success': True, 'message': 'Sync complete.', 'records_processed': count}), 200
+        t.start()
+        return jsonify({'job_id': job_id}), 202
     except Exception as e:
         logger.error(f"sync_logs error: {e}")
-        return jsonify({'error': f'Sync failed: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to start sync: {str(e)}'}), 500
+
+
+@app.route('/api/sync/status/<job_id>', methods=['GET'])
+@require_auth
+def sync_status(user_id, job_id):
+    """Poll the status of an async sync job."""
+    job = sync_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify({
+        'status':      job['status'],
+        'files_done':  job.get('files_done', 0),
+        'files_total': job.get('files_total', 0),
+        'records':     job.get('records', 0),
+        'error':       job.get('error'),
+    }), 200
 
 
 # ── OAuth helpers ─────────────────────────────────────────────────────────────

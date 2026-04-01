@@ -919,20 +919,49 @@ def save_credentials(user_id):
         if not access_key or not secret_key:
             return jsonify({'error': 'Both access_key and secret_key are required.'}), 400
 
-        # Quick validation — try listing buckets before saving
+        # Step 1: Call STS GetCallerIdentity to validate credentials and get Account ID
         try:
-            boto3.client(
-                's3',
+            sts = boto3.client(
+                'sts',
                 aws_access_key_id=access_key,
                 aws_secret_access_key=secret_key,
                 region_name=region,
-            ).list_buckets()
+            )
+            identity = sts.get_caller_identity()
+            aws_account_id = identity['Account']  # e.g. "751285160227"
+            aws_user_arn   = identity['Arn']       # e.g. "arn:aws:iam::751285160227:user/john"
         except Exception as aws_err:
             return jsonify({'error': f'AWS credentials are invalid: {aws_err}'}), 400
 
+        # Step 2: Check if this AWS Account ID is already linked to another CloudProof account
+        existing = execute_query(
+            "SELECT username FROM users WHERE aws_account_id = %s AND id != %s",
+            (aws_account_id, user_id),
+            fetch=True
+        )
+        if existing:
+            return jsonify({
+                'error': f'This AWS account ({aws_account_id}) is already linked to @{existing[0]["username"]}. '
+                         f'Each AWS account can only have one CloudProof profile.'
+            }), 409
+
+        # Step 3: Check if current user already has a DIFFERENT AWS account linked
+        current = execute_query(
+            "SELECT aws_account_id FROM users WHERE id = %s",
+            (user_id,),
+            fetch=True
+        )
+        if current and current[0]['aws_account_id'] and current[0]['aws_account_id'] != aws_account_id:
+            return jsonify({
+                'error': 'Your profile is already linked to a different AWS account. '
+                         'Each CloudProof profile can only be linked to one AWS account.'
+            }), 409
+
+        # Step 4: Save credentials + account identity
         execute_query(
-            "UPDATE users SET aws_access_key_encrypted = %s, aws_secret_key_encrypted = %s, aws_region = %s WHERE id = %s",
-            (encrypt_credential(access_key), encrypt_credential(secret_key), region, user_id)
+            "UPDATE users SET aws_access_key_encrypted = %s, aws_secret_key_encrypted = %s, "
+            "aws_region = %s, aws_account_id = %s, aws_user_arn = %s WHERE id = %s",
+            (encrypt_credential(access_key), encrypt_credential(secret_key), region, aws_account_id, aws_user_arn, user_id)
         )
         logger.info(f"Credentials saved for user {user_id}")
         return jsonify({'success': True, 'message': 'AWS credentials saved.'}), 200

@@ -61,6 +61,7 @@ export default function App({ username }) {
 
   const owner      = isOwner(username);
   const loggedInMe = getLoggedInOwner(username); // non-null if this IS the logged-in user
+  const [lastSync, setLastSync] = useState(null);  // last sync timestamp
 
   const handleLogout = () => {
     localStorage.removeItem('cloudproof_token');
@@ -93,6 +94,50 @@ export default function App({ username }) {
   const openTest = () => { setPin(''); setSyncResult(null); setShowTest(true); };
   const closeModal = () => { setShowSync(false); setShowTest(false); setPin(''); setSyncResult(null); };
 
+  // JWT-based sync for logged-in users (incremental - only new logs)
+  const doJwtSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    const token = localStorage.getItem('cloudproof_token');
+    try {
+      // Start async sync job
+      const { data: startData } = await axios.post(
+        `${API}/api/sync`, {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const jobId = startData.job_id;
+
+      // Poll until done
+      const poll = setInterval(async () => {
+        try {
+          const { data: status } = await axios.get(
+            `${API}/api/sync/status/${jobId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (status.status === 'done') {
+            clearInterval(poll);
+            setSyncResult({ ok: true, msg: `Sync complete! ${status.records} new records processed.` });
+            setLastSync(new Date().toLocaleTimeString());
+            setSyncing(false);
+            await fetchProfile();
+          } else if (status.status === 'error') {
+            clearInterval(poll);
+            setSyncResult({ ok: false, msg: status.error || 'Sync failed.' });
+            setSyncing(false);
+          }
+        } catch {
+          clearInterval(poll);
+          setSyncResult({ ok: false, msg: 'Lost connection during sync.' });
+          setSyncing(false);
+        }
+      }, 2000);
+    } catch (e) {
+      setSyncResult({ ok: false, msg: e.response?.data?.error || 'Failed to start sync.' });
+      setSyncing(false);
+    }
+  };
+
+  // Legacy sync-pin based sync
   const doSync = async (isTest) => {
     if (!pin.trim()) return;
     setSyncing(true);
@@ -192,7 +237,14 @@ export default function App({ username }) {
                 Generate Test Logs
               </button>
             )}
-            {owner && (
+            {/* JWT sync for logged-in owner */}
+            {loggedInMe && (
+              <button className="btn btn-primary btn-sm" onClick={doJwtSync} disabled={syncing}>
+                {syncing ? <><span className="spinner" />Syncing…</> : 'Sync from AWS'}
+              </button>
+            )}
+            {/* Legacy sync-pin for old profiles */}
+            {owner && !loggedInMe && (
               <button className="btn btn-primary btn-sm" onClick={openSync} disabled={syncing}>
                 {syncing ? <><span className="spinner" />Syncing…</> : 'Sync from AWS'}
               </button>
@@ -205,6 +257,16 @@ export default function App({ username }) {
           </div>
         </div>
       </nav>
+
+      {/* Sync result toast for JWT sync */}
+      {syncResult && loggedInMe && (
+        <div className={`alert alert-${syncResult.ok ? 'success' : 'error'}`}
+          style={{margin:'8px 24px', borderRadius:8, cursor:'pointer'}}
+          onClick={() => setSyncResult(null)}
+        >
+          {syncResult.msg} {lastSync && syncResult.ok && <span style={{opacity:0.6, fontSize:11}}>· {lastSync}</span>}
+        </div>
+      )}
 
       {/* ── Page ──────────────────────────────────────────────────────────── */}
       <div className="page">

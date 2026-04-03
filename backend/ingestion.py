@@ -3,6 +3,8 @@ import json
 import gzip
 import re
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from io import BytesIO
 from scoring import calculate_score, DAILY_SCORE_CAP, SERVICE_DAILY_CAP, ACTION_DAILY_CAP
@@ -302,117 +304,123 @@ def process_user_s3_logs(
     if progress_callback:
         progress_callback('total', len(file_keys))
 
-    # ── Daily cap accumulators (persist across batches) ───────────────────────
-    daily_service_scores = {}
-    daily_totals = {}
-    daily_action_scores = {}
-    total_records = 0
-    BATCH_SIZE = 50
+    # ── Per-file download + parse (runs in parallel) ──────────────────────────
+    def download_and_parse(key):
+        """Download one S3 file, validate it, and return scored activities."""
+        try:
+            s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
+            if key.endswith('.gz'):
+                with gzip.GzipFile(fileobj=BytesIO(s3_obj['Body'].read())) as gz:
+                    log_data = json.loads(gz.read())
+            else:
+                log_data = json.loads(s3_obj['Body'].read().decode('utf-8'))
+        except Exception as e:
+            logger.warning(f"Error reading s3://{bucket_name}/{key}: {e}")
+            return []
 
-    # ── Process files in batches of BATCH_SIZE ────────────────────────────────
-    for batch_start in range(0, len(file_keys), BATCH_SIZE):
-        batch_keys = file_keys[batch_start:batch_start + BATCH_SIZE]
-        batch_activities = []
+        records = log_data.get('Records', [])
 
-        for key in batch_keys:
+        # 3-Layer fraud validation
+        if not _validate_arn_ownership(records, registered_account_id):
+            logger.warning(f"FRAUD: ARN mismatch in {key} for user {user_id} - skipping")
+            return []
+        if not _validate_log_metadata(records, key):
+            logger.warning(f"FRAUD: Metadata invalid in {key} for user {user_id} - skipping")
+            return []
+        if not _verify_sample_via_api(records, aws_access_key, aws_secret_key, aws_region):
+            logger.warning(f"FRAUD: API verification failed in {key} for user {user_id} - skipping")
+            return []
+
+        file_activities = []
+        for record in records:
             try:
-                s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
-                if key.endswith('.gz'):
-                    with gzip.GzipFile(fileobj=BytesIO(s3_obj['Body'].read())) as gzipfile:
-                        log_data = json.loads(gzipfile.read())
-                else:
-                    log_data = json.loads(s3_obj['Body'].read().decode('utf-8'))
-            except Exception as e:
-                logger.warning(f"Error reading s3://{bucket_name}/{key}: {str(e)}")
-                continue
-
-            records = log_data.get('Records', [])
-
-            # ── 3-Layer Fraud Validation ───────────────────────────────────────
-            # Layer 1: ARN ownership check
-            if not _validate_arn_ownership(records, registered_account_id):
-                logger.warning(f"FRAUD: ARN mismatch in {key} for user {user_id} - skipping file")
-                continue
-
-            # Layer 2: Metadata validation
-            if not _validate_log_metadata(records, key):
-                logger.warning(f"FRAUD: Metadata invalid in {key} for user {user_id} - skipping file")
-                continue
-
-            # Layer 3: Random 10% API sampling
-            if not _verify_sample_via_api(records, aws_access_key, aws_secret_key, aws_region):
-                logger.warning(f"FRAUD: API verification failed in {key} for user {user_id} - skipping file")
-                continue
-            # ──────────────────────────────────────────────────────────────────────
-
-            for record in records:
-                try:
-                    read_only = record.get('readOnly')
-                    if isinstance(read_only, str):
-                        if read_only.lower() == 'true':
-                            continue
-                    elif read_only is True:
+                read_only = record.get('readOnly')
+                if isinstance(read_only, str):
+                    if read_only.lower() == 'true':
                         continue
-
-                    event_time_str = record.get('eventTime')
-                    event_source = record.get('eventSource', '')
-                    event_name = record.get('eventName', '')
-
-                    if not event_time_str or not event_source or not event_name:
-                        continue
-
-                    event_time = datetime.strptime(event_time_str, '%Y-%m-%dT%H:%M:%SZ')
-                    service = event_source.split('.')[0].upper()
-                    action = event_name
-
-                    score = calculate_score(service, action)
-                    if score <= 0:
-                        continue
-
-                    date_key = event_time.date()
-                    service_key = f"{date_key}_{service}"
-                    action_key = f"{date_key}_{service}_{action}"
-
-                    daily_totals.setdefault(date_key, 0)
-                    daily_service_scores.setdefault(service_key, 0)
-                    daily_action_scores.setdefault(action_key, 0)
-
-                    if daily_totals[date_key] >= DAILY_SCORE_CAP:
-                        continue
-                    if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
-                        continue
-                    if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
-                        continue
-
-                    event_id = record.get('eventID')
-
-                    batch_activities.append({
-                        'user_id': user_id,
-                        'date': date_key,
-                        'service': service,
-                        'action': action,
-                        'score': score,
-                        'event_id': event_id,
-                    })
-
-                    daily_totals[date_key] += score
-                    daily_service_scores[service_key] += score
-                    daily_action_scores[action_key] += score
-
-                except Exception as e:
-                    logger.warning(f"Error processing record from {key}: {str(e)}")
+                elif read_only is True:
                     continue
 
-        if batch_activities:
-            store_activities(batch_activities)
-            total_records += len(batch_activities)
-            logger.info(f"Batch stored {len(batch_activities)} activities for user {user_id}")
+                event_time_str = record.get('eventTime')
+                event_source   = record.get('eventSource', '')
+                event_name     = record.get('eventName', '')
 
-        if progress_callback:
-            progress_callback('batch_done', len(batch_keys))
+                if not event_time_str or not event_source or not event_name:
+                    continue
 
-    if total_records:
-        logger.info(f"Total: stored {total_records} activities for user {user_id} from s3://{bucket_name}")
+                event_time = datetime.strptime(event_time_str, '%Y-%m-%dT%H:%M:%SZ')
+                service    = event_source.split('.')[0].upper()
+                score      = calculate_score(service, event_name)
+                if score <= 0:
+                    continue
+
+                file_activities.append({
+                    'user_id':  user_id,
+                    'date':     event_time.date(),
+                    'service':  service,
+                    'action':   event_name,
+                    'score':    score,
+                    'event_id': record.get('eventID'),
+                })
+            except Exception as e:
+                logger.warning(f"Error processing record from {key}: {e}")
+                continue
+
+        return file_activities
+
+    # ── Run downloads in parallel (10 workers) ────────────────────────────────
+    WORKERS    = 10
+    all_activities = []
+    files_done = 0
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {executor.submit(download_and_parse, key): key for key in file_keys}
+        for future in as_completed(futures):
+            result = future.result()
+            with lock:
+                all_activities.extend(result)
+                files_done += 1
+            if progress_callback and files_done % 10 == 0:
+                progress_callback('batch_done', 10)
+
+    if progress_callback:
+        progress_callback('batch_done', files_done % 10)
+
+    # ── Apply daily caps across all collected activities ───────────────────────
+    # Must be done sequentially after parallel download to keep caps consistent
+    daily_totals         = {}
+    daily_service_scores = {}
+    daily_action_scores  = {}
+    capped_activities    = []
+
+    # Sort by date so caps are applied chronologically
+    all_activities.sort(key=lambda x: x['date'])
+
+    for activity in all_activities:
+        date_key    = activity['date']
+        service_key = f"{date_key}_{activity['service']}"
+        action_key  = f"{date_key}_{activity['service']}_{activity['action']}"
+
+        daily_totals.setdefault(date_key, 0)
+        daily_service_scores.setdefault(service_key, 0)
+        daily_action_scores.setdefault(action_key, 0)
+
+        if daily_totals[date_key]            >= DAILY_SCORE_CAP:   continue
+        if daily_service_scores[service_key] >= SERVICE_DAILY_CAP: continue
+        if daily_action_scores[action_key]   >= ACTION_DAILY_CAP:  continue
+
+        capped_activities.append(activity)
+        daily_totals[date_key]            += activity['score']
+        daily_service_scores[service_key] += activity['score']
+        daily_action_scores[action_key]   += activity['score']
+
+    # ── Store and return ──────────────────────────────────────────────────────
+    total_records = 0
+    if capped_activities:
+        store_activities(capped_activities)
+        total_records = len(capped_activities)
+        logger.info(f"Parallel sync complete: {total_records} activities for user {user_id} from {len(file_keys)} files")
 
     try:
         update_last_processed_timestamp(user_id, datetime.now())

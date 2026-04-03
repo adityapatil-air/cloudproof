@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS users (
     sync_pin_hash TEXT,
     aws_access_key_encrypted TEXT,
     aws_secret_key_encrypted TEXT,
+    aws_account_id TEXT,
+    aws_user_arn TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -190,6 +192,8 @@ def _migrate_sqlite(conn: sqlite3.Connection):
         "ALTER TABLE users ADD COLUMN sync_pin_hash TEXT",
         "ALTER TABLE users ADD COLUMN aws_access_key_encrypted TEXT",
         "ALTER TABLE users ADD COLUMN aws_secret_key_encrypted TEXT",
+        "ALTER TABLE users ADD COLUMN aws_account_id TEXT",
+        "ALTER TABLE users ADD COLUMN aws_user_arn TEXT",
         "ALTER TABLE activity_logs ADD COLUMN event_id TEXT",
     ]
     for sql in new_columns:

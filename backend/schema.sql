@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
     sync_pin_hash VARCHAR(255),
     aws_access_key_encrypted TEXT,
     aws_secret_key_encrypted TEXT,
+    aws_account_id VARCHAR(20),
+    aws_user_arn TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

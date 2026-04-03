@@ -1,6 +1,10 @@
 import boto3
 import json
 import gzip
+import re
+import random
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from io import BytesIO
 from scoring import calculate_score, DAILY_SCORE_CAP, SERVICE_DAILY_CAP, ACTION_DAILY_CAP
@@ -125,6 +129,120 @@ def process_cloudtrail_logs(user_id, role_arn, bucket_name):
         raise
 
 
+# ── Fraud Prevention ─────────────────────────────────────────────────────────
+
+def _validate_arn_ownership(records, registered_account_id):
+    """Layer 1: Verify every event ARN belongs to the registered AWS account."""
+    if not registered_account_id:
+        return True
+    for record in records:
+        arn = record.get('userIdentity', {}).get('arn', '')
+        if arn:
+            parts = arn.split(':')
+            if len(parts) >= 5 and parts[4] and parts[4] != registered_account_id:
+                logger.warning(f"ARN mismatch: {arn} vs registered {registered_account_id}")
+                return False
+    return True
+
+
+def _validate_log_metadata(records, s3_key):
+    """Layer 2: Validate structural patterns - catches manually crafted fake logs."""
+    uuid_pattern = re.compile(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    )
+    filename = s3_key.split('/')[-1]
+    time_match = re.search(r'_(\d{8}T\d{4}Z)_', filename)
+    filename_time = None
+    if time_match:
+        try:
+            filename_time = datetime.strptime(time_match.group(1), '%Y%m%dT%H%MZ')
+        except Exception:
+            pass
+
+    for record in records:
+        # Check 1: eventID must be valid UUID
+        event_id = record.get('eventID', '')
+        if event_id and not uuid_pattern.match(event_id):
+            logger.warning(f"Invalid eventID format: {event_id} in {s3_key}")
+            return False
+
+        # Check 2: eventTime must be within 2 hours of filename timestamp
+        if filename_time:
+            try:
+                event_time = datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
+                if abs((event_time - filename_time).total_seconds()) > 7200:
+                    logger.warning(f"Event time {event_time} too far from filename time {filename_time}")
+                    return False
+            except Exception:
+                pass
+
+        # Check 3: Suspicious source IPs
+        source_ip = record.get('sourceIPAddress', '')
+        if source_ip in ['127.0.0.1', 'localhost', '0.0.0.0']:
+            logger.warning(f"Suspicious sourceIPAddress: {source_ip} in {s3_key}")
+            return False
+
+    return True
+
+
+def _verify_sample_via_api(records, ak, sk, region, sample_rate=0.1):
+    """Layer 3: Randomly verify 10% of scoreable events via CloudTrail API - cannot be faked."""
+    if not ak or not sk:
+        return True
+
+    # Only verify events that actually score points (not read-only actions)
+    from scoring import calculate_score, should_ignore_action
+    scoreable = [
+        r for r in records
+        if r.get('eventID')
+        and not r.get('readOnly', False)
+        and not should_ignore_action(r.get('eventName', ''))
+        and calculate_score(
+            r.get('eventSource', '').split('.')[0].upper(),
+            r.get('eventName', '')
+        ) > 0
+    ]
+    if not scoreable:
+        return True
+
+    sample_size = max(1, int(len(scoreable) * sample_rate))
+    sample = random.sample(scoreable, min(sample_size, len(scoreable)))
+
+    try:
+        cloudtrail = boto3.client(
+            'cloudtrail',
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+            region_name=region
+        )
+        for record in sample:
+            event_id   = record.get('eventID')
+            event_name = record.get('eventName')
+            event_time = datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
+
+            response = cloudtrail.lookup_events(
+                LookupAttributes=[{'AttributeKey': 'EventId', 'AttributeValue': event_id}],
+                StartTime=event_time - timedelta(minutes=5),
+                EndTime=event_time   + timedelta(minutes=5),
+                MaxResults=1
+            )
+            if not response.get('Events'):
+                logger.warning(f"Event {event_id} ({event_name}) not found in CloudTrail API - possible fake!")
+                return False
+
+            api_name = response['Events'][0].get('EventName', '')
+            if api_name != event_name:
+                logger.warning(f"Event name mismatch: log={event_name} api={api_name}")
+                return False
+
+    except Exception as e:
+        logger.warning(f"CloudTrail API verification skipped: {e}")
+
+    return True
+
+
+# ── Main ingestion ────────────────────────────────────────────────────────────
+
 def process_user_s3_logs(
     user_id: int,
     bucket_name: str,
@@ -153,6 +271,13 @@ def process_user_s3_logs(
     else:
         s3 = boto3.client('s3', region_name=aws_region)
 
+    # Fetch registered AWS account ID for fraud validation
+    user_row = execute_query(
+        "SELECT aws_account_id FROM users WHERE id = %s",
+        (user_id,), fetch=True
+    )
+    registered_account_id = user_row[0]['aws_account_id'] if user_row else None
+
     last_processed = get_last_processed_timestamp(user_id)
     if last_processed is not None:
         last_processed = last_processed.replace(tzinfo=None)
@@ -179,98 +304,123 @@ def process_user_s3_logs(
     if progress_callback:
         progress_callback('total', len(file_keys))
 
-    # ── Daily cap accumulators (persist across batches) ───────────────────────
-    daily_service_scores = {}
-    daily_totals = {}
-    daily_action_scores = {}
-    total_records = 0
-    BATCH_SIZE = 50
+    # ── Per-file download + parse (runs in parallel) ──────────────────────────
+    def download_and_parse(key):
+        """Download one S3 file, validate it, and return scored activities."""
+        try:
+            s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
+            if key.endswith('.gz'):
+                with gzip.GzipFile(fileobj=BytesIO(s3_obj['Body'].read())) as gz:
+                    log_data = json.loads(gz.read())
+            else:
+                log_data = json.loads(s3_obj['Body'].read().decode('utf-8'))
+        except Exception as e:
+            logger.warning(f"Error reading s3://{bucket_name}/{key}: {e}")
+            return []
 
-    # ── Process files in batches of BATCH_SIZE ────────────────────────────────
-    for batch_start in range(0, len(file_keys), BATCH_SIZE):
-        batch_keys = file_keys[batch_start:batch_start + BATCH_SIZE]
-        batch_activities = []
+        records = log_data.get('Records', [])
 
-        for key in batch_keys:
+        # 3-Layer fraud validation
+        if not _validate_arn_ownership(records, registered_account_id):
+            logger.warning(f"FRAUD: ARN mismatch in {key} for user {user_id} - skipping")
+            return []
+        if not _validate_log_metadata(records, key):
+            logger.warning(f"FRAUD: Metadata invalid in {key} for user {user_id} - skipping")
+            return []
+        if not _verify_sample_via_api(records, aws_access_key, aws_secret_key, aws_region):
+            logger.warning(f"FRAUD: API verification failed in {key} for user {user_id} - skipping")
+            return []
+
+        file_activities = []
+        for record in records:
             try:
-                s3_obj = s3.get_object(Bucket=bucket_name, Key=key)
-                if key.endswith('.gz'):
-                    with gzip.GzipFile(fileobj=BytesIO(s3_obj['Body'].read())) as gzipfile:
-                        log_data = json.loads(gzipfile.read())
-                else:
-                    log_data = json.loads(s3_obj['Body'].read().decode('utf-8'))
-            except Exception as e:
-                logger.warning(f"Error reading s3://{bucket_name}/{key}: {str(e)}")
-                continue
-
-            for record in log_data.get('Records', []):
-                try:
-                    read_only = record.get('readOnly')
-                    if isinstance(read_only, str):
-                        if read_only.lower() == 'true':
-                            continue
-                    elif read_only is True:
+                read_only = record.get('readOnly')
+                if isinstance(read_only, str):
+                    if read_only.lower() == 'true':
                         continue
-
-                    event_time_str = record.get('eventTime')
-                    event_source = record.get('eventSource', '')
-                    event_name = record.get('eventName', '')
-
-                    if not event_time_str or not event_source or not event_name:
-                        continue
-
-                    event_time = datetime.strptime(event_time_str, '%Y-%m-%dT%H:%M:%SZ')
-                    service = event_source.split('.')[0].upper()
-                    action = event_name
-
-                    score = calculate_score(service, action)
-                    if score <= 0:
-                        continue
-
-                    date_key = event_time.date()
-                    service_key = f"{date_key}_{service}"
-                    action_key = f"{date_key}_{service}_{action}"
-
-                    daily_totals.setdefault(date_key, 0)
-                    daily_service_scores.setdefault(service_key, 0)
-                    daily_action_scores.setdefault(action_key, 0)
-
-                    if daily_totals[date_key] >= DAILY_SCORE_CAP:
-                        continue
-                    if daily_service_scores[service_key] >= SERVICE_DAILY_CAP:
-                        continue
-                    if daily_action_scores[action_key] >= ACTION_DAILY_CAP:
-                        continue
-
-                    event_id = record.get('eventID')
-
-                    batch_activities.append({
-                        'user_id': user_id,
-                        'date': date_key,
-                        'service': service,
-                        'action': action,
-                        'score': score,
-                        'event_id': event_id,
-                    })
-
-                    daily_totals[date_key] += score
-                    daily_service_scores[service_key] += score
-                    daily_action_scores[action_key] += score
-
-                except Exception as e:
-                    logger.warning(f"Error processing record from {key}: {str(e)}")
+                elif read_only is True:
                     continue
 
-        if batch_activities:
-            store_activities(batch_activities)
-            total_records += len(batch_activities)
-            logger.info(f"Batch stored {len(batch_activities)} activities for user {user_id}")
+                event_time_str = record.get('eventTime')
+                event_source   = record.get('eventSource', '')
+                event_name     = record.get('eventName', '')
 
-        if progress_callback:
-            progress_callback('batch_done', len(batch_keys))
+                if not event_time_str or not event_source or not event_name:
+                    continue
 
-    if total_records:
-        logger.info(f"Total: stored {total_records} activities for user {user_id} from s3://{bucket_name}")
+                event_time = datetime.strptime(event_time_str, '%Y-%m-%dT%H:%M:%SZ')
+                service    = event_source.split('.')[0].upper()
+                score      = calculate_score(service, event_name)
+                if score <= 0:
+                    continue
+
+                file_activities.append({
+                    'user_id':  user_id,
+                    'date':     event_time.date(),
+                    'service':  service,
+                    'action':   event_name,
+                    'score':    score,
+                    'event_id': record.get('eventID'),
+                })
+            except Exception as e:
+                logger.warning(f"Error processing record from {key}: {e}")
+                continue
+
+        return file_activities
+
+    # ── Run downloads in parallel ──────────────────────────────────────────────
+    WORKERS    = int(os.getenv('SYNC_WORKERS', '4'))
+    all_activities = []
+    files_done = 0
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        futures = {executor.submit(download_and_parse, key): key for key in file_keys}
+        for future in as_completed(futures):
+            result = future.result()
+            with lock:
+                all_activities.extend(result)
+                files_done += 1
+            if progress_callback and files_done % 10 == 0:
+                progress_callback('batch_done', 10)
+
+    if progress_callback:
+        progress_callback('batch_done', files_done % 10)
+
+    # ── Apply daily caps across all collected activities ───────────────────────
+    # Must be done sequentially after parallel download to keep caps consistent
+    daily_totals         = {}
+    daily_service_scores = {}
+    daily_action_scores  = {}
+    capped_activities    = []
+
+    # Sort by date so caps are applied chronologically
+    all_activities.sort(key=lambda x: x['date'])
+
+    for activity in all_activities:
+        date_key    = activity['date']
+        service_key = f"{date_key}_{activity['service']}"
+        action_key  = f"{date_key}_{activity['service']}_{activity['action']}"
+
+        daily_totals.setdefault(date_key, 0)
+        daily_service_scores.setdefault(service_key, 0)
+        daily_action_scores.setdefault(action_key, 0)
+
+        if daily_totals[date_key]            >= DAILY_SCORE_CAP:   continue
+        if daily_service_scores[service_key] >= SERVICE_DAILY_CAP: continue
+        if daily_action_scores[action_key]   >= ACTION_DAILY_CAP:  continue
+
+        capped_activities.append(activity)
+        daily_totals[date_key]            += activity['score']
+        daily_service_scores[service_key] += activity['score']
+        daily_action_scores[action_key]   += activity['score']
+
+    # ── Store and return ──────────────────────────────────────────────────────
+    total_records = 0
+    if capped_activities:
+        store_activities(capped_activities)
+        total_records = len(capped_activities)
+        logger.info(f"Parallel sync complete: {total_records} activities for user {user_id} from {len(file_keys)} files")
 
     try:
         update_last_processed_timestamp(user_id, datetime.now())

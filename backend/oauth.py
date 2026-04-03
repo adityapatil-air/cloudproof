@@ -17,12 +17,27 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-GITHUB_CLIENT_ID     = os.getenv('GITHUB_CLIENT_ID', '')
-GITHUB_CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET', '')
-GOOGLE_CLIENT_ID     = os.getenv('GOOGLE_CLIENT_ID', '')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
-BACKEND_URL          = os.getenv('BACKEND_URL',  'http://localhost:5000')
-FRONTEND_URL         = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _backend_url() -> str:
+    """Always read fresh from env so Render env-vars are honoured at runtime."""
+    return os.getenv('BACKEND_URL', 'http://localhost:5000').rstrip('/')
+
+def _frontend_url() -> str:
+    return os.getenv('FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+
+def _github_client_id() -> str:
+    return os.getenv('GITHUB_CLIENT_ID', '')
+
+def _github_client_secret() -> str:
+    return os.getenv('GITHUB_CLIENT_SECRET', '')
+
+def _google_client_id() -> str:
+    return os.getenv('GOOGLE_CLIENT_ID', '')
+
+def _google_client_secret() -> str:
+    return os.getenv('GOOGLE_CLIENT_SECRET', '')
 
 
 # ── CSRF state (signed JWT, 10-min TTL) ─────────────────────────────────────
@@ -48,10 +63,11 @@ def verify_state(state: str, expected_provider: str) -> bool:
 # ── GitHub ───────────────────────────────────────────────────────────────────
 
 def github_auth_url(state: str) -> str:
-    cb = f"{BACKEND_URL}/api/auth/github/callback"
+    cb = f"{_backend_url()}/api/auth/github/callback"
+    logger.info(f"[GitHub OAuth] redirect_uri = {cb}")
     return (
         f"https://github.com/login/oauth/authorize"
-        f"?client_id={GITHUB_CLIENT_ID}"
+        f"?client_id={_github_client_id()}"
         f"&redirect_uri={cb}"
         f"&scope=user:email"
         f"&state={state}"
@@ -60,13 +76,14 @@ def github_auth_url(state: str) -> str:
 
 def github_get_user(code: str) -> dict:
     """Exchange authorization code for GitHub user profile."""
-    cb = f"{BACKEND_URL}/api/auth/github/callback"
+    cb = f"{_backend_url()}/api/auth/github/callback"
+    logger.info(f"[GitHub OAuth] token exchange redirect_uri = {cb}")
 
     token_res = requests.post(
         'https://github.com/login/oauth/access_token',
         json={
-            'client_id':     GITHUB_CLIENT_ID,
-            'client_secret': GITHUB_CLIENT_SECRET,
+            'client_id':     _github_client_id(),
+            'client_secret': _github_client_secret(),
             'code':          code,
             'redirect_uri':  cb,
         },
@@ -103,10 +120,11 @@ def github_get_user(code: str) -> dict:
 # ── Google ───────────────────────────────────────────────────────────────────
 
 def google_auth_url(state: str) -> str:
-    cb = f"{BACKEND_URL}/api/auth/google/callback"
+    cb = f"{_backend_url()}/api/auth/google/callback"
+    logger.info(f"[Google OAuth] redirect_uri = {cb}")
     return (
         f"https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={GOOGLE_CLIENT_ID}"
+        f"?client_id={_google_client_id()}"
         f"&redirect_uri={cb}"
         f"&response_type=code"
         f"&scope=openid+email+profile"
@@ -118,14 +136,15 @@ def google_auth_url(state: str) -> str:
 
 def google_get_user(code: str) -> dict:
     """Exchange authorization code for Google user profile."""
-    cb = f"{BACKEND_URL}/api/auth/google/callback"
+    cb = f"{_backend_url()}/api/auth/google/callback"
+    logger.info(f"[Google OAuth] token exchange redirect_uri = {cb}")
 
     token_res = requests.post(
         'https://oauth2.googleapis.com/token',
         data={
             'code':          code,
-            'client_id':     GOOGLE_CLIENT_ID,
-            'client_secret': GOOGLE_CLIENT_SECRET,
+            'client_id':     _google_client_id(),
+            'client_secret': _google_client_secret(),
             'redirect_uri':  cb,
             'grant_type':    'authorization_code',
         },

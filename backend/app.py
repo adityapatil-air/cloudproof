@@ -50,6 +50,19 @@ def health_check():
     except Exception as e:
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 503
 
+@app.route('/api/debug/oauth-urls', methods=['GET'])
+def debug_oauth_urls():
+    """Debug endpoint — shows the exact redirect URIs being used. Remove after fixing OAuth."""
+    backend = os.getenv('BACKEND_URL', 'http://localhost:5000').rstrip('/')
+    return jsonify({
+        'BACKEND_URL':          backend,
+        'FRONTEND_URL':         os.getenv('FRONTEND_URL', 'http://localhost:3000'),
+        'google_redirect_uri':  f"{backend}/api/auth/google/callback",
+        'github_redirect_uri':  f"{backend}/api/auth/github/callback",
+        'GOOGLE_CLIENT_ID':     os.getenv('GOOGLE_CLIENT_ID', 'NOT SET')[:20] + '...',
+        'GITHUB_CLIENT_ID':     os.getenv('GITHUB_CLIENT_ID', 'NOT SET')[:10] + '...',
+    })
+
 @app.route('/api/users', methods=['POST'])
 def create_user():
     try:

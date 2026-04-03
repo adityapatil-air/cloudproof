@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useParams, Navigate } from 'react-router-dom';
 import './index.css';
 import App          from './App';
-import Register     from './Register';
 import Auth         from './pages/Auth';
 import AuthCallback from './pages/AuthCallback';
 import Setup        from './pages/Setup';
@@ -53,7 +52,6 @@ root.render(
         <Route path="/setup" element={<PrivateRoute><Setup /></PrivateRoute>} />
 
         {/* Legacy register (kept for backward compat) */}
-        <Route path="/register" element={<Register />} />
 
         {/* Public profile viewer */}
         <Route path="/:username" element={<UserRoute />} />

@@ -4,12 +4,15 @@ os: linux
 files:
   - source: frontend/build
     destination: /var/www/html
+    overwrite: yes
 
   - source: backend
     destination: /home/ubuntu/backend
+    overwrite: yes
 
   - source: scripts
     destination: /home/ubuntu/scripts
+    overwrite: yes
 
 hooks:
   BeforeInstall:

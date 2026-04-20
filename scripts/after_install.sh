@@ -10,9 +10,6 @@ if [ ! -f /home/ubuntu/backend/.env ]; then
     cp /home/ubuntu/backend/.env.example /home/ubuntu/backend/.env
 fi
 
-# Copy frontend build to nginx web root
-cp -r /var/www/html/. /var/www/html/
-
 # Configure nginx to serve frontend and proxy backend
 cat > /etc/nginx/sites-available/cloudproof <<EOF
 server {

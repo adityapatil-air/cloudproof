@@ -5,7 +5,9 @@ apt-get update -y
 apt-get install -y python3-dev build-essential
 
 cd /home/ubuntu/backend
-pip3 install -r requirements.txt
+python3 -m venv venv
+venv/bin/pip install --upgrade pip
+venv/bin/pip install -r requirements.txt
 
 # Safe .env copy
 if [ ! -f /home/ubuntu/backend/.env ]; then
@@ -46,7 +48,7 @@ After=network.target
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/backend
-ExecStart=/usr/bin/python3 /home/ubuntu/backend/app.py
+ExecStart=/home/ubuntu/backend/venv/bin/python /home/ubuntu/backend/app.py
 Restart=always
 RestartSec=5
 EnvironmentFile=/home/ubuntu/backend/.env

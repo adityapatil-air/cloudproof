@@ -2,7 +2,7 @@ version: 0.0
 os: linux
 
 files:
-  - source: frontend/dist
+  - source: frontend/build
     destination: /var/www/html
 
   - source: backend

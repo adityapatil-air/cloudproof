@@ -22,7 +22,7 @@ phases:
 
 artifacts:
   files:
-    - frontend/dist/**/*
+    - frontend/build/**/*
     - frontend/dist
     - appspec.yml
     - scripts/**/*

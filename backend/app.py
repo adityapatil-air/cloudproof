@@ -27,6 +27,7 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # In-memory store for async sync jobs: job_id → state dict
 sync_jobs = {}
+sync_jobs_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1081,10 +1082,11 @@ def select_bucket(user_id):
 def _run_sync(job_id, user_id, bucket_name, s3_prefix, aws_region, ak, sk):
     """Background worker: process S3 logs and update sync_jobs[job_id]."""
     def on_progress(event, value):
-        if event == 'total':
-            sync_jobs[job_id]['files_total'] = value
-        elif event == 'batch_done':
-            sync_jobs[job_id]['files_done'] = sync_jobs[job_id].get('files_done', 0) + value
+        with sync_jobs_lock:
+            if event == 'total':
+                sync_jobs[job_id]['files_total'] = value
+            elif event == 'batch_done':
+                sync_jobs[job_id]['files_done'] = sync_jobs[job_id].get('files_done', 0) + value
 
     try:
         count = process_user_s3_logs(
@@ -1096,11 +1098,13 @@ def _run_sync(job_id, user_id, bucket_name, s3_prefix, aws_region, ak, sk):
             aws_secret_key=sk or None,
             progress_callback=on_progress,
         )
-        sync_jobs[job_id].update({'status': 'done', 'records': count, 'finished_at': datetime.now()})
+        with sync_jobs_lock:
+            sync_jobs[job_id].update({'status': 'done', 'records': count, 'finished_at': datetime.now()})
         logger.info(f"Sync complete for user {user_id}: {count} records")
     except Exception as e:
         logger.error(f"Sync error for user {user_id}: {e}")
-        sync_jobs[job_id].update({'status': 'error', 'error': str(e), 'finished_at': datetime.now()})
+        with sync_jobs_lock:
+            sync_jobs[job_id].update({'status': 'error', 'error': str(e), 'finished_at': datetime.now()})
 
 
 @app.route('/api/sync', methods=['POST'])
@@ -1121,19 +1125,21 @@ def sync_logs(user_id):
 
         # Purge stale completed jobs older than 5 minutes
         cutoff = datetime.now() - timedelta(minutes=5)
-        stale = [jid for jid, j in sync_jobs.items() if j.get('finished_at') and j['finished_at'] < cutoff]
-        for jid in stale:
-            sync_jobs.pop(jid, None)
+        with sync_jobs_lock:
+            stale = [jid for jid, j in sync_jobs.items() if j.get('finished_at') and j['finished_at'] < cutoff]
+            for jid in stale:
+                sync_jobs.pop(jid, None)
 
         job_id = secrets.token_hex(8)
-        sync_jobs[job_id] = {
-            'status': 'running',
-            'files_done': 0,
-            'files_total': 0,
-            'records': 0,
-            'error': None,
-            'finished_at': None,
-        }
+        with sync_jobs_lock:
+            sync_jobs[job_id] = {
+                'status': 'running',
+                'files_done': 0,
+                'files_total': 0,
+                'records': 0,
+                'error': None,
+                'finished_at': None,
+            }
 
         t = threading.Thread(
             target=_run_sync,
@@ -1155,12 +1161,14 @@ def sync_status(user_id, job_id):
     job = sync_jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
+    with sync_jobs_lock:
+        snapshot = dict(job)
     return jsonify({
-        'status':      job['status'],
-        'files_done':  job.get('files_done', 0),
-        'files_total': job.get('files_total', 0),
-        'records':     job.get('records', 0),
-        'error':       job.get('error'),
+        'status':      snapshot['status'],
+        'files_done':  snapshot.get('files_done', 0),
+        'files_total': snapshot.get('files_total', 0),
+        'records':     snapshot.get('records', 0),
+        'error':       snapshot.get('error'),
     }), 200
 
 
@@ -1382,4 +1390,32 @@ def auth_reset_password():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True, port=5000)
+    # Start auto-sync scheduler in a background daemon thread
+    import schedule
+    import time
+    from scheduler import sync_all_users
+
+    SYNC_TIME = '02:00'
+
+    schedule.every().day.at(SYNC_TIME).do(sync_all_users)
+
+    # Periodically purge stale sync jobs (every 10 minutes)
+    def _cleanup_sync_jobs():
+        cutoff = datetime.now() - timedelta(minutes=5)
+        with sync_jobs_lock:
+            stale = [jid for jid, j in sync_jobs.items() if j.get('finished_at') and j['finished_at'] < cutoff]
+            for jid in stale:
+                sync_jobs.pop(jid, None)
+
+    schedule.every(10).minutes.do(_cleanup_sync_jobs)
+
+    def _run_scheduler():
+        logger.info(f"Auto-sync scheduler started — runs daily at {SYNC_TIME}")
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
+    t = threading.Thread(target=_run_scheduler, daemon=True)
+    t.start()
+
+    app.run(host='0.0.0.0', debug=True, port=5000, use_reloader=False)

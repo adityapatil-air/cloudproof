@@ -209,31 +209,39 @@ def _verify_sample_via_api(records, ak, sk, region, sample_rate=0.1):
     sample = random.sample(scoreable, min(sample_size, len(scoreable)))
 
     try:
-        cloudtrail = boto3.client(
-            'cloudtrail',
-            aws_access_key_id=ak,
-            aws_secret_access_key=sk,
-            region_name=region
-        )
+        # Group records by region so we create one client per region, not per record
+        from collections import defaultdict
+        by_region = defaultdict(list)
         for record in sample:
-            event_id   = record.get('eventID')
-            event_name = record.get('eventName')
-            event_time = datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
+            event_region = record.get('awsRegion') or region
+            by_region[event_region].append(record)
 
-            response = cloudtrail.lookup_events(
-                LookupAttributes=[{'AttributeKey': 'EventId', 'AttributeValue': event_id}],
-                StartTime=event_time - timedelta(minutes=5),
-                EndTime=event_time   + timedelta(minutes=5),
-                MaxResults=1
+        for event_region, region_records in by_region.items():
+            cloudtrail = boto3.client(
+                'cloudtrail',
+                aws_access_key_id=ak,
+                aws_secret_access_key=sk,
+                region_name=event_region
             )
-            if not response.get('Events'):
-                logger.warning(f"Event {event_id} ({event_name}) not found in CloudTrail API - possible fake!")
-                return False
+            for record in region_records:
+                event_id    = record.get('eventID')
+                event_name  = record.get('eventName')
+                event_time  = datetime.strptime(record['eventTime'], '%Y-%m-%dT%H:%M:%SZ')
 
-            api_name = response['Events'][0].get('EventName', '')
-            if api_name != event_name:
-                logger.warning(f"Event name mismatch: log={event_name} api={api_name}")
-                return False
+                response = cloudtrail.lookup_events(
+                    LookupAttributes=[{'AttributeKey': 'EventId', 'AttributeValue': event_id}],
+                    StartTime=event_time - timedelta(minutes=20),
+                    EndTime=event_time   + timedelta(minutes=20),
+                    MaxResults=1
+                )
+                if not response.get('Events'):
+                    logger.warning(f"Event {event_id} ({event_name}) not found in CloudTrail API - possible fake!")
+                    return False
+
+                api_name = response['Events'][0].get('EventName', '')
+                if api_name != event_name:
+                    logger.warning(f"Event name mismatch: log={event_name} api={api_name}")
+                    return False
 
     except Exception as e:
         logger.warning(f"CloudTrail API verification skipped: {e}")
@@ -261,15 +269,22 @@ def process_user_s3_logs(
       ('total', n)       — total number of files to process
       ('batch_done', n)  — n records processed in the latest batch
     """
+    WORKERS = 25
+
     if aws_access_key and aws_secret_key:
         s3 = boto3.client(
             's3',
             region_name=aws_region,
             aws_access_key_id=aws_access_key,
             aws_secret_access_key=aws_secret_key,
+            config=boto3.session.Config(max_pool_connections=WORKERS),
         )
     else:
-        s3 = boto3.client('s3', region_name=aws_region)
+        s3 = boto3.client(
+            's3',
+            region_name=aws_region,
+            config=boto3.session.Config(max_pool_connections=WORKERS),
+        )
 
     # Fetch registered AWS account ID for fraud validation
     user_row = execute_query(
@@ -368,8 +383,7 @@ def process_user_s3_logs(
 
         return file_activities
 
-    # ── Run downloads in parallel (10 workers) ────────────────────────────────
-    WORKERS    = 10
+    # ── Run downloads in parallel (25 workers) ────────────────────────────────
     all_activities = []
     files_done = 0
     lock = threading.Lock()
@@ -384,8 +398,9 @@ def process_user_s3_logs(
             if progress_callback and files_done % 10 == 0:
                 progress_callback('batch_done', 10)
 
-    if progress_callback:
-        progress_callback('batch_done', files_done % 10)
+    remainder = files_done % 10
+    if progress_callback and remainder > 0:
+        progress_callback('batch_done', remainder)
 
     # ── Apply daily caps across all collected activities ───────────────────────
     # Must be done sequentially after parallel download to keep caps consistent
@@ -716,71 +731,95 @@ def process_s3_cloudtrail_logs(bucket_name):
 
     return len(activities)
 
+# Global write lock for SQLite — prevents "database locked" under parallel ingestion
+_sqlite_write_lock = threading.Lock()
+
+
 def store_activities(activities):
     """
-    Insert scored activities and aggregate daily scores.
-    event_id is used as a dedup key — if the same CloudTrail event is seen
-    again (re-sync, reset, etc.) it is silently skipped so scores are never
-    double-counted. Heatmap data persists even if the source S3 logs are deleted.
+    Bulk-insert scored activities using INSERT OR IGNORE for dedup,
+    then upsert daily_scores — all in a single DB connection.
     """
-    daily_aggregates = {}
-    for activity in activities:
-        try:
-            event_id = activity.get('event_id')
+    if not activities:
+        return
 
-            # Dedup check: if this event was already stored, skip entirely.
-            # This is the guard that makes stored scores permanent regardless
-            # of what happens to the S3 logs later.
-            if event_id:
-                already = execute_query(
-                    "SELECT 1 FROM activity_logs WHERE user_id = %s AND event_id = %s",
-                    (activity['user_id'], event_id),
-                    fetch=True,
-                )
-                if already:
-                    continue
+    from database import get_db_connection, DB_ENGINE, _convert_sqlite_placeholders
 
-            execute_query(
-                "INSERT INTO activity_logs (user_id, date, service, action, score, event_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                (activity['user_id'], activity['date'], activity['service'], activity['action'], activity['score'], event_id)
+    lock_ctx = _sqlite_write_lock if DB_ENGINE == 'sqlite' else threading.nullcontext()
+    with lock_ctx:
+        conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        daily_aggregates = {}
+
+        if DB_ENGINE == 'sqlite':
+            insert_sql = (
+                "INSERT OR IGNORE INTO activity_logs "
+                "(user_id, date, service, action, score, event_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            )
+        else:
+            insert_sql = (
+                "INSERT INTO activity_logs "
+                "(user_id, date, service, action, score, event_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (user_id, event_id) DO NOTHING"
             )
 
-            # Only reach here if the row was actually inserted.
-            aggregate_key = (activity["user_id"], activity["date"])
-            daily_aggregates[aggregate_key] = daily_aggregates.get(
-                aggregate_key, 0
-            ) + int(activity["score"])
-        except Exception as e:
-            logger.error(f"Error storing activity: {str(e)}")
-            continue
-
-    # After inserting activity_logs, aggregate and upsert daily_scores once per user/day.
-    for (user_id, date_value), day_total in daily_aggregates.items():
-        try:
-            existing = execute_query(
-                "SELECT total_score FROM daily_scores WHERE user_id = %s AND date = %s",
-                (user_id, date_value),
-                fetch=True,
-            )
-
-            existing_total = int(existing[0]["total_score"]) if existing else 0
-            new_total = min(existing_total + int(day_total), DAILY_SCORE_CAP)
-
-            if existing:
-                execute_query(
-                    "UPDATE daily_scores SET total_score = %s WHERE user_id = %s AND date = %s",
-                    (new_total, user_id, date_value),
+        for activity in activities:
+            try:
+                row = (
+                    activity['user_id'], activity['date'],
+                    activity['service'], activity['action'],
+                    activity['score'], activity.get('event_id'),
                 )
-            else:
-                execute_query(
-                    "INSERT INTO daily_scores (user_id, date, total_score) VALUES (%s, %s, %s)",
-                    (user_id, date_value, new_total),
-                )
-        except Exception as e:
-            logger.error(
-                f"Error updating daily score for user_id={user_id} date={date_value}: {str(e)}"
-            )
-            continue
+                cursor.execute(insert_sql, row)
+                if cursor.rowcount > 0:
+                    key = (activity['user_id'], activity['date'])
+                    daily_aggregates[key] = daily_aggregates.get(key, 0) + int(activity['score'])
+            except Exception as e:
+                logger.error(f"Error storing activity: {e}")
+                continue
+
+        # Upsert daily_scores in the same connection
+        for (user_id, date_value), day_total in daily_aggregates.items():
+            try:
+                if DB_ENGINE == 'sqlite':
+                    cursor.execute(
+                        "SELECT total_score FROM daily_scores WHERE user_id = ? AND date = ?",
+                        (user_id, date_value)
+                    )
+                    row = cursor.fetchone()
+                    existing_total = int(row[0]) if row else 0
+                    new_total = min(existing_total + day_total, DAILY_SCORE_CAP)
+                    if row:
+                        cursor.execute(
+                            "UPDATE daily_scores SET total_score = ? WHERE user_id = ? AND date = ?",
+                            (new_total, user_id, date_value)
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO daily_scores (user_id, date, total_score) VALUES (?, ?, ?)",
+                            (user_id, date_value, new_total)
+                        )
+                else:
+                    cursor.execute(
+                        "INSERT INTO daily_scores (user_id, date, total_score) VALUES (%s, %s, %s) "
+                        "ON CONFLICT (user_id, date) DO UPDATE "
+                        "SET total_score = LEAST(daily_scores.total_score + EXCLUDED.total_score, %s)",
+                        (user_id, date_value, min(day_total, DAILY_SCORE_CAP), DAILY_SCORE_CAP)
+                    )
+            except Exception as e:
+                logger.error(f"Error updating daily score for user_id={user_id} date={date_value}: {e}")
+                continue
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"store_activities failed: {e}")
+        raise
+    finally:
+        conn.close()
 
 def get_last_processed_timestamp(user_id):
     try:

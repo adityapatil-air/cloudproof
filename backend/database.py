@@ -1,18 +1,24 @@
 import os
 import sqlite3
 import time
+import threading
 
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-
 DB_ENGINE = os.getenv("DB_ENGINE", "sqlite").lower()
 BASE_DIR = os.path.dirname(__file__)
 SQLITE_DB_PATH = os.path.join(BASE_DIR, "cloudproof.db")
 SQLITE_INITIALIZED = False
+
+# PostgreSQL connection pool (created lazily)
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
+_sqlite_init_lock = threading.Lock()
 
 
 SQLITE_SCHEMA = """
@@ -111,56 +117,57 @@ CREATE INDEX IF NOT EXISTS idx_resource_state_user
 
 
 def get_db_connection(retries=3):
-    """
-    Return a database connection.
-
-    By default, local development uses SQLite backed by cloudproof.db
-    in the backend folder. PostgreSQL remains available and can be
-    selected by setting DB_ENGINE=postgres.
-    """
-    engine = DB_ENGINE
-    if engine == "sqlite":
+    if DB_ENGINE == "sqlite":
         return _get_sqlite_connection()
     else:
         return _get_postgres_connection(retries=retries)
 
 
 def _get_postgres_connection(retries=3):
+    global _pg_pool
+    if _pg_pool is None:
+        with _pg_pool_lock:
+            if _pg_pool is None:
+                _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                    minconn=2,
+                    maxconn=20,
+                    host=os.getenv("DB_HOST", "localhost"),
+                    port=os.getenv("DB_PORT", "5432"),
+                    database=os.getenv("DB_NAME", "cloudproof"),
+                    user=os.getenv("DB_USER", "postgres"),
+                    password=os.getenv("DB_PASSWORD", "postgres"),
+                    connect_timeout=10,
+                )
     for attempt in range(retries):
         try:
-            return psycopg2.connect(
-                host=os.getenv("DB_HOST", "localhost"),
-                port=os.getenv("DB_PORT", "5432"),
-                database=os.getenv("DB_NAME", "cloudproof"),
-                user=os.getenv("DB_USER", "postgres"),
-                password=os.getenv("DB_PASSWORD", "postgres"),
-                connect_timeout=10,
-            )
+            return _pg_pool.getconn()
         except psycopg2.OperationalError as e:
             if attempt < retries - 1:
                 time.sleep(2)
                 continue
-            raise Exception(
-                f"Database connection failed after {retries} attempts: {str(e)}"
-            )
+            raise Exception(f"Database connection failed after {retries} attempts: {str(e)}")
 
 
 def _get_sqlite_connection():
-    """Return a SQLite connection and ensure schema exists."""
+    """Return a SQLite connection with WAL mode for better concurrent reads."""
     global SQLITE_INITIALIZED
 
     conn = sqlite3.connect(
         SQLITE_DB_PATH,
         detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+        check_same_thread=False,
     )
     conn.row_factory = sqlite3.Row
-
-    # Enforce foreign key constraints in SQLite
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA cache_size = -32000;")  # 32 MB cache
 
     if not SQLITE_INITIALIZED:
-        _init_sqlite_schema(conn)
-        SQLITE_INITIALIZED = True
+        with _sqlite_init_lock:
+            if not SQLITE_INITIALIZED:
+                _init_sqlite_schema(conn)
+                SQLITE_INITIALIZED = True
 
     return conn
 
@@ -229,6 +236,7 @@ def _convert_sqlite_placeholders(query, params):
 def execute_query(query, params=None, fetch=False):
     conn = None
     cursor = None
+    is_pooled = DB_ENGINE != 'sqlite'
     try:
         conn = get_db_connection()
 
@@ -256,4 +264,7 @@ def execute_query(query, params=None, fetch=False):
         if cursor:
             cursor.close()
         if conn:
-            conn.close()
+            if is_pooled and _pg_pool:
+                _pg_pool.putconn(conn)  # return to pool instead of closing
+            else:
+                conn.close()

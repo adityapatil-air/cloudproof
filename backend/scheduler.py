@@ -72,7 +72,7 @@ def sync_all_users():
 
             # Update last_auto_synced_at
             execute_query(
-                "UPDATE users SET last_auto_synced_at = ? WHERE id = ?",
+                "UPDATE users SET last_auto_synced_at = %s WHERE id = %s",
                 (datetime.now(), user['id'])
             )
 
@@ -85,7 +85,10 @@ def sync_all_users():
 
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
-schedule.every().day.at(SYNC_TIME).do(sync_all_users)
+# Only register the schedule when running as a standalone script,
+# NOT when imported by app.py (which registers its own schedule).
+if __name__ == '__main__':
+    schedule.every().day.at(SYNC_TIME).do(sync_all_users)
 
 if __name__ == '__main__':
     logger.info(f"CloudProof Auto-Sync Scheduler started.")

@@ -1,18 +1,16 @@
 version: 0.0
 os: linux
+file_exists_behavior: OVERWRITE
 
 files:
   - source: frontend/build
     destination: /var/www/html
-    overwrite: yes
 
   - source: backend
     destination: /home/ubuntu/backend
-    overwrite: yes
 
   - source: scripts
     destination: /home/ubuntu/scripts
-    overwrite: yes
 
 hooks:
   BeforeInstall:

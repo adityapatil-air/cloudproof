@@ -1,19 +1,24 @@
 #!/bin/bash
 set -e
 
-# Install Python dependencies
+apt-get update -y
+apt-get install -y python3-dev build-essential
+
 cd /home/ubuntu/backend
 pip3 install -r requirements.txt
 
-# Copy .env if not already present
+# Safe .env copy
 if [ ! -f /home/ubuntu/backend/.env ]; then
-    cp /home/ubuntu/backend/.env.example /home/ubuntu/backend/.env
+    if [ -f /home/ubuntu/backend/.env.example ]; then
+        cp /home/ubuntu/backend/.env.example /home/ubuntu/backend/.env
+    fi
 fi
 
-# Configure nginx to serve frontend and proxy backend
+# Nginx config
 cat > /etc/nginx/sites-available/cloudproof <<EOF
 server {
     listen 80;
+    server_name _;
 
     location / {
         root /var/www/html;
@@ -32,7 +37,7 @@ EOF
 ln -sf /etc/nginx/sites-available/cloudproof /etc/nginx/sites-enabled/cloudproof
 rm -f /etc/nginx/sites-enabled/default
 
-# Create systemd service for Flask backend
+# systemd service
 cat > /etc/systemd/system/cloudproof.service <<EOF
 [Unit]
 Description=CloudProof Flask Backend
@@ -41,7 +46,7 @@ After=network.target
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/backend
-ExecStart=/usr/bin/python3 app.py
+ExecStart=/usr/bin/python3 /home/ubuntu/backend/app.py
 Restart=always
 RestartSec=5
 EnvironmentFile=/home/ubuntu/backend/.env
@@ -52,3 +57,5 @@ EOF
 
 systemctl daemon-reload
 systemctl enable cloudproof
+systemctl restart cloudproof || systemctl start cloudproof
+systemctl restart nginx

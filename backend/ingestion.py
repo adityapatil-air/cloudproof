@@ -743,9 +743,10 @@ def store_activities(activities):
     if not activities:
         return
 
+    from contextlib import nullcontext
     from database import get_db_connection, DB_ENGINE, _convert_sqlite_placeholders
 
-    lock_ctx = _sqlite_write_lock if DB_ENGINE == 'sqlite' else threading.nullcontext()
+    lock_ctx = _sqlite_write_lock if DB_ENGINE == 'sqlite' else nullcontext()
     with lock_ctx:
         conn = get_db_connection()
     try:

@@ -5,7 +5,7 @@ echo "Starting AfterInstall..."
 # ---------------- SYSTEM SETUP ----------------
 apt-get update -y
 apt-get install -y python3-dev build-essential python3.12-venv \
-                   postgresql-client netcat-openbsd nginx \
+                   postgresql-client-16 netcat-openbsd nginx \
                    certbot python3-certbot-nginx
 
 cd /home/ubuntu/backend
@@ -20,11 +20,19 @@ venv/bin/pip install -r requirements.txt psycopg2-binary python-dotenv
 
 # ---------------- FETCH DB HOST FROM SSM ----------------
 echo "Fetching DB_HOST from SSM..."
-DB_HOST=$(aws ssm get-parameter \
-  --name /cloudproof/DB_HOST \
-  --region ap-south-1 \
-  --query Parameter.Value \
-  --output text)
+for i in {1..20}; do
+    DB_HOST=$(aws ssm get-parameter \
+      --name /cloudproof/DB_HOST \
+      --region ap-south-1 \
+      --query Parameter.Value \
+      --output text 2>/dev/null || echo "")
+    if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "None" ]; then
+        echo "DB_HOST fetched: $DB_HOST"
+        break
+    fi
+    echo "Waiting for DB_HOST in SSM... ($i/20)"
+    sleep 15
+done
 
 # ---------------- FETCH DB SECRET ----------------
 echo "Fetching DB credentials from Secrets Manager..."

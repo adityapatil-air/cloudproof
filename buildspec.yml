@@ -13,7 +13,7 @@ phases:
 
   build:
     commands:
-      - cd frontend && REACT_APP_API_URL=$EC2_PUBLIC_IP npm run build
+      - cd frontend && npm run build
 
   post_build:
     commands:

@@ -17,7 +17,7 @@ function getLoggedInOwner(username) {
   return null;
 }
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API = process.env.REACT_APP_API_URL || '';
 const IS_DEV = process.env.NODE_ENV === 'development';
 
 const SVC_COLORS = [

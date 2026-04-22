@@ -29,7 +29,7 @@ const ACTIVE_STATES     = ['running','active','available','attached','creating',
 const TERMINATED_STATES = ['terminated','deleted','deleting'];
 
 export default function Resources({ username, apiBase }) {
-  const API = apiBase || process.env.REACT_APP_API_URL || 'http://localhost:5000';
+  const API = apiBase || process.env.REACT_APP_API_URL || '';
   const [resources, setResources] = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');

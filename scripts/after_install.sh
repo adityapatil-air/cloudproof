@@ -1,33 +1,80 @@
 #!/bin/bash
-set -e
 
+echo "Starting AfterInstall..."
+
+# ---------------- SYSTEM SETUP ----------------
 apt-get update -y
-apt-get install -y python3-dev build-essential python3.12-venv
+apt-get install -y python3-dev build-essential python3.12-venv \
+                   postgresql-client netcat-openbsd awscli nginx \
+                   certbot python3-certbot-nginx
 
 cd /home/ubuntu/backend
-python3 -m venv venv
+
+# ---------------- VENV ----------------
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
+
 venv/bin/pip install --upgrade pip
-venv/bin/pip install -r requirements.txt
+venv/bin/pip install -r requirements.txt psycopg2-binary python-dotenv
 
-# Create empty database file with correct permissions
-touch /home/ubuntu/backend/cloudproof.db
-chown ubuntu:ubuntu /home/ubuntu/backend/cloudproof.db
-chmod 664 /home/ubuntu/backend/cloudproof.db
-
-# Ensure backend directory is owned by ubuntu
-chown -R ubuntu:ubuntu /home/ubuntu/backend
-
-# Safe .env copy
-if [ ! -f /home/ubuntu/backend/.env ]; then
-    if [ -f /home/ubuntu/backend/.env.example ]; then
-        cp /home/ubuntu/backend/.env.example /home/ubuntu/backend/.env
+# ---------------- ENV FILE ----------------
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
     fi
 fi
 
-# Nginx config
+# ---------------- FETCH DB HOST FROM SSM ----------------
+echo "Fetching DB_HOST from SSM..."
+DB_HOST=$(aws ssm get-parameter \
+  --name /cloudproof/DB_HOST \
+  --region ap-south-1 \
+  --query Parameter.Value \
+  --output text)
+
+# ---------------- FETCH DB SECRET ----------------
+echo "Fetching DB credentials from Secrets Manager..."
+SECRET=$(aws secretsmanager get-secret-value \
+  --region ap-south-1 \
+  --secret-id cloudproof-db-secret \
+  --query SecretString \
+  --output text)
+
+DB_USER=$(echo $SECRET | python3 -c "import sys, json; print(json.load(sys.stdin)['username'])")
+DB_PASSWORD=$(echo $SECRET | python3 -c "import sys, json; print(json.load(sys.stdin)['password'])")
+DB_NAME=$(echo $SECRET | python3 -c "import sys, json; print(json.load(sys.stdin)['dbname'])")
+
+export PGPASSWORD=$DB_PASSWORD
+
+# ---------------- WAIT FOR RDS ----------------
+echo "Waiting for RDS..."
+for i in {1..20}; do
+    nc -z $DB_HOST 5432 && break
+    echo "DB not ready... retrying ($i/20)"
+    sleep 5
+done
+
+# ---------------- CREATE DATABASE ----------------
+echo "Creating database if not exists..."
+psql -h $DB_HOST -U $DB_USER -d postgres -c "CREATE DATABASE $DB_NAME;" || true
+
+# ---------------- RUN SCHEMA ----------------
+echo "Running schema.sql..."
+psql -h $DB_HOST -U $DB_USER -d $DB_NAME -f /home/ubuntu/backend/schema.sql || true
+
+echo "Database setup complete ✅"
+
+# ---------------- PERMISSIONS ----------------
+touch /home/ubuntu/backend/cloudproof.db
+chown -R ubuntu:ubuntu /home/ubuntu/backend
+chmod 664 /home/ubuntu/backend/cloudproof.db
+
+# ---------------- NGINX HTTP CONFIG ----------------
 cat > /etc/nginx/sites-available/cloudproof <<EOF
 server {
-    server_name handsoncloud.in;
+    listen 80;
+    server_name handsoncloud.in www.handsoncloud.in;
 
     location / {
         root /var/www/html;
@@ -49,28 +96,27 @@ server {
             return 204;
         }
     }
-
-    listen 443 ssl;
-    ssl_certificate /etc/letsencrypt/live/handsoncloud.in/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/handsoncloud.in/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-}
-
-server {
-    if (\$host = handsoncloud.in) {
-        return 301 https://\$host\$request_uri;
-    }
-    listen 80;
-    server_name handsoncloud.in;
-    return 404;
 }
 EOF
 
 ln -sf /etc/nginx/sites-available/cloudproof /etc/nginx/sites-enabled/cloudproof
 rm -f /etc/nginx/sites-enabled/default
 
-# systemd service
+systemctl restart nginx
+
+# ---------------- HTTPS SETUP ----------------
+echo "Setting up HTTPS with Certbot..."
+certbot --nginx \
+  -d handsoncloud.in \
+  --non-interactive \
+  --agree-tos \
+  -m rjrohan0340@gmail.com \
+  --redirect || echo "Certbot failed - run manually after DNS propagates"
+
+# ---------------- AUTO RENEW ----------------
+echo "0 3 * * * certbot renew --quiet" | crontab -
+
+# ---------------- SYSTEMD SERVICE ----------------
 cat > /etc/systemd/system/cloudproof.service <<EOF
 [Unit]
 Description=CloudProof Flask Backend
@@ -88,7 +134,10 @@ EnvironmentFile=/home/ubuntu/backend/.env
 WantedBy=multi-user.target
 EOF
 
+# ---------------- START SERVICES ----------------
 systemctl daemon-reload
 systemctl enable cloudproof
 systemctl restart cloudproof || systemctl start cloudproof
 systemctl restart nginx
+
+echo "Deployment completed successfully 🚀"

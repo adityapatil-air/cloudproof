@@ -15,7 +15,7 @@ function formatTime(ts) {
 }
 
 export default function Dashboard({ username, apiBase }) {
-  const API = apiBase || process.env.REACT_APP_API_URL || 'http://localhost:5000';
+  const API = apiBase || process.env.REACT_APP_API_URL || '';
   const [days,    setDays]    = useState([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');

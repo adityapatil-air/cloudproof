@@ -1,0 +1,464 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudProof Full Infra + CI/CD + ALB + ACM + AutoScaling
+
+Parameters:
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+
+  SecretKey:
+    Type: String
+    NoEcho: true
+    Default: "cloudproof-secret-key-change-this"
+
+  ACMCertificateArn:
+    Type: String
+    Description: ARN of existing ACM certificate for handsoncloud.in
+
+Resources:
+
+# ---------------- VPC ----------------
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+# ---------------- SUBNETS ----------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: ap-south-1a
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: ap-south-1b
+
+# ---------------- INTERNET ----------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+# ---------------- ROUTE ----------------
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Assoc1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  Assoc2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+# ---------------- SECURITY ----------------
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  EC2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EC2 access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSG
+
+  RDSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Postgres from EC2
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EC2SG
+
+# ---------------- SECRETS ----------------
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: cloudproof-db-secret
+      SecretString: !Sub |
+        {
+          "username": "postgres",
+          "password": "${DBPassword}",
+          "dbname": "cloudproof"
+        }
+
+# ---------------- IAM ----------------
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: CustomAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - ssm:GetParameter
+                Resource: "*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+# ---------------- RDS ----------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB subnets
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  MyDB:
+    Type: AWS::RDS::DBInstance
+    DependsOn: DBSecret
+    DeletionPolicy: Retain
+    Properties:
+      Engine: postgres
+      EngineVersion: "15"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      DBName: cloudproof
+      MasterUsername: "{{resolve:secretsmanager:cloudproof-db-secret:SecretString:username}}"
+      MasterUserPassword: "{{resolve:secretsmanager:cloudproof-db-secret:SecretString:password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSG
+      PubliclyAccessible: false
+
+# ---------------- SSM PARAM ----------------
+  DBHostParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /cloudproof/DB_HOST
+      Type: String
+      Value: !GetAtt MyDB.Endpoint.Address
+
+  SecretKeyParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /cloudproof/SECRET_KEY
+      Type: String
+      Value: !Ref SecretKey
+
+# ---------------- LAUNCH TEMPLATE ----------------
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DependsOn: MyDB
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t2.micro
+        KeyName: !Ref KeyPair
+        ImageId: ami-0f58b397bc5c1f2e8
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+        SecurityGroupIds:
+          - !Ref EC2SG
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: CloudProof
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            while lsof /var/lib/dpkg/lock-frontend > /dev/null 2>&1; do
+              sleep 5
+            done
+            systemctl disable unattended-upgrades
+            systemctl stop unattended-upgrades
+            apt-get update -y
+            apt-get install -y ruby-full wget unzip python3 python3-pip python3-dev \
+                               build-essential nginx git curl python3.12-venv \
+                               postgresql-client-16
+
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            ./aws/install
+
+            cd /home/ubuntu
+            wget https://aws-codedeploy-ap-south-1.s3.ap-south-1.amazonaws.com/latest/install
+            chmod +x ./install
+            ./install auto
+            systemctl start codedeploy-agent
+            systemctl enable codedeploy-agent
+
+            mkdir -p /var/www/html
+            chown -R ubuntu:ubuntu /var/www/html
+            chmod -R 755 /var/www/html
+
+            systemctl start nginx
+            systemctl enable nginx
+
+            curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+            apt-get install -y nodejs
+
+# ---------------- AUTO SCALING ----------------
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: CloudProof
+          PropagateAtLaunch: true
+
+# ---------------- ALB ----------------
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSG
+      Scheme: internet-facing
+      Type: application
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref MyVPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: 443
+            StatusCode: HTTP_301
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+# ---------------- S3 ----------------
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+
+# ---------------- CI/CD ROLE ----------------
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+                - codebuild.amazonaws.com
+                - codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+# ---------------- CODEBUILD ----------------
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: CloudProofBuild
+      ServiceRole: !GetAtt PipelineRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODEPIPELINE
+
+# ---------------- CODEDEPLOY ----------------
+  CodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+
+  CodeDeployGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName: CloudProofDeployGroup
+      ApplicationName: !Ref CodeDeployApp
+      ServiceRoleArn: !GetAtt PipelineRole.Arn
+      DeploymentStyle:
+        DeploymentType: IN_PLACE
+        DeploymentOption: WITHOUT_TRAFFIC_CONTROL
+      AutoScalingGroups:
+        - !Ref AutoScalingGroup
+
+# ---------------- CODEPIPELINE ----------------
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: adityapatil-air
+                Repo: cloudproof
+                Branch: main
+                OAuthToken: '{{resolve:ssm:/cloudproof/github-token}}'
+
+        - Name: Build
+          Actions:
+            - Name: BuildStep
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+
+        - Name: Deploy
+          Actions:
+            - Name: DeployStep
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: 1
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ApplicationName: !Ref CodeDeployApp
+                DeploymentGroupName: !Ref CodeDeployGroup
+
+# ---------------- ROUTE53 ----------------
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: handsoncloud.in.
+      Name: handsoncloud.in
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ALB.DNSName
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+
+Outputs:
+  LoadBalancerDNS:
+    Value: !GetAtt ALB.DNSName
+
+  RDSEndpoint:
+    Value: !GetAtt MyDB.Endpoint.Address

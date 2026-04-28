@@ -5,7 +5,8 @@ echo "Starting AfterInstall..."
 # ---------------- SYSTEM SETUP ----------------
 apt-get update -y
 apt-get install -y python3-dev build-essential python3.12-venv \
-                   postgresql-client-16 netcat-openbsd nginx
+                   postgresql-client-16 netcat-openbsd nginx \
+                   certbot python3-certbot-nginx
 
 cd /home/ubuntu/backend
 
@@ -92,7 +93,7 @@ chmod 664 /home/ubuntu/backend/cloudproof.db
 cat > /etc/nginx/sites-available/cloudproof <<EOF
 server {
     listen 80;
-    server_name _;
+    server_name handsoncloud.in www.handsoncloud.in;
 
     location / {
         root /var/www/html;
@@ -121,6 +122,19 @@ ln -sf /etc/nginx/sites-available/cloudproof /etc/nginx/sites-enabled/cloudproof
 rm -f /etc/nginx/sites-enabled/default
 
 systemctl restart nginx
+
+# ---------------- HTTPS SETUP ----------------
+echo "Setting up HTTPS with Certbot..."
+certbot --nginx \
+  -d handsoncloud.in \
+  -d www.handsoncloud.in \
+  --non-interactive \
+  --agree-tos \
+  -m rjrohan0340@gmail.com \
+  --redirect || echo "Certbot failed - run manually after DNS propagates"
+
+# ---------------- AUTO RENEW ----------------
+echo "0 3 * * * certbot renew --quiet" | crontab -
 
 # ---------------- SYSTEMD SERVICE ----------------
 cat > /etc/systemd/system/cloudproof.service <<EOF

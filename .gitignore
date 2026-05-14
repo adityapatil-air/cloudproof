@@ -53,6 +53,9 @@ docker-compose.override.yml
 # AWS
 .aws/
 *.pem
+*.gz
+backend/*.gz
+backend/sample_logs/
 
 # Testing
 coverage/

@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     action VARCHAR(255) NOT NULL,
     score INTEGER NOT NULL,
     event_id VARCHAR(100),
+    timestamp TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, event_id)
 );
@@ -38,5 +39,18 @@ CREATE TABLE IF NOT EXISTS processing_state (
     UNIQUE(user_id)
 );
 
-CREATE INDEX idx_activity_logs_user_date ON activity_logs(user_id, date);
-CREATE INDEX idx_daily_scores_user_date ON daily_scores(user_id, date);
+CREATE TABLE IF NOT EXISTS resource_state (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    resource_type VARCHAR(100) NOT NULL,
+    resource_id VARCHAR(255) NOT NULL,
+    parent_resource_id VARCHAR(255),
+    state VARCHAR(100) NOT NULL,
+    metadata TEXT,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user_date ON activity_logs(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_scores_user_date ON daily_scores(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_resource_state_user ON resource_state(user_id, resource_type, state);

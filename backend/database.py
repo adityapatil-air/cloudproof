@@ -109,6 +109,7 @@ def _get_postgres_connection(retries=3):
                 user=os.getenv("DB_USER", "postgres"),
                 password=os.getenv("DB_PASSWORD", "postgres"),
                 connect_timeout=10,
+                sslmode='require',
             )
         except psycopg2.OperationalError as e:
             if attempt < retries - 1:

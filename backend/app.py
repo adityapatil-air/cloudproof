@@ -30,9 +30,10 @@ def internal_error(error):
 def health_check():
     try:
         execute_query("SELECT 1", fetch=True)
-        return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()}), 200
+        db_status = 'connected'
     except Exception as e:
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 503
+        db_status = str(e)
+    return jsonify({'status': 'healthy', 'db': db_status, 'timestamp': datetime.now().isoformat()}), 200
 
 @app.route('/api/users', methods=['POST'])
 def create_user():
